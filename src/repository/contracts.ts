@@ -15,6 +15,8 @@ export interface RepositoriKasus {
   ambilKasus(caseId: IdKasus): Promise<VersiKasus | null>;
   ambilVersi(caseId: IdKasus, versionId: IdVersiKasus): Promise<VersiKasus | null>;
   simpanVersi(kasus: VersiKasus): Promise<VersiKasus>;
+  ambilVersiKasus(caseId: IdKasus, versionId: IdVersiKasus): Promise<VersiKasus | null>;
+  simpanVersiKasus(kasus: VersiKasus): Promise<VersiKasus>;
 }
 
 export interface RepositoriSesiKasus {

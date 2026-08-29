@@ -31,6 +31,9 @@ export interface VersiKasus {
     tags: string[];
     starRating?: 1 | 2 | 3 | 4 | 5 | undefined;
   };
+  caseBibleRef: string;
+  assetManifestRef: string;
+  contentSummary: string;
   publishedAt?: WaktuIso | undefined;
 }
 
