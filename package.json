@@ -4,11 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test"
   },
   "keywords": [],
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
+    "firebase-admin": "^14.3.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   },
