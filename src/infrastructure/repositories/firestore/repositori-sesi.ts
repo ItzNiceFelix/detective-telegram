@@ -4,8 +4,8 @@ import type { IdSesiKasus } from "../../../fondasi/primitif.js";
 import { mapErrorFirestore } from "../../firebase/error-mapper.js";
 
 export interface KontrakRepositoriSesiFirestore {
-  ambil(sessionId: IdSesiKasus): Promise<SesiKasus | null>;
-  simpan(sesi: SesiKasus): Promise<SesiKasus>;
+  ambil(sessionId: IdSesiKasus, transaction?: Transaction): Promise<SesiKasus | null>;
+  simpan(sesi: SesiKasus, transaction?: Transaction): Promise<SesiKasus>;
   transaksi<T>(runner: (transaction: Transaction) => Promise<T>): Promise<T>;
 }
 
@@ -14,11 +14,11 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
 
   private readonly namaKoleksi = "case_sessions";
 
-  ambil(sessionId: IdSesiKasus): Promise<SesiKasus | null> {
-    return this.firestore
-      .collection(this.namaKoleksi)
-      .doc(String(sessionId))
-      .get()
+  ambil(sessionId: IdSesiKasus, transaction?: Transaction): Promise<SesiKasus | null> {
+    const dokumenRef = this.firestore.collection(this.namaKoleksi).doc(String(sessionId));
+    const operasiDokumen = transaction ? transaction.get(dokumenRef) : dokumenRef.get();
+
+    return Promise.resolve(operasiDokumen)
       .then((dokumen) => {
         if (!dokumen.exists) {
           return null;
@@ -31,10 +31,17 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       });
   }
 
-  async simpan(sesi: SesiKasus): Promise<SesiKasus> {
+  async simpan(sesi: SesiKasus, transaction?: Transaction): Promise<SesiKasus> {
     try {
       const data = this.serialize(sesi);
-      await this.firestore.collection(this.namaKoleksi).doc(String(sesi.sessionId)).set(data);
+      const dokumenRef = this.firestore.collection(this.namaKoleksi).doc(String(sesi.sessionId));
+
+      if (transaction) {
+        transaction.set(dokumenRef, data);
+        return sesi;
+      }
+
+      await dokumenRef.set(data);
       return sesi;
     } catch (error) {
       throw mapErrorFirestore(error);

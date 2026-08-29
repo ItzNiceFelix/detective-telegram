@@ -1,3 +1,4 @@
+import type { Transaction } from "firebase-admin/firestore";
 import type { IdEvent, IdGrup, IdPemain, IdSesiKasus, WaktuIso } from "../fondasi/primitif.js";
 
 export enum JenisKejadianDomain {
@@ -48,6 +49,6 @@ export interface MetadataIdempoten {
 }
 
 export interface KontrakIdempoten {
-  ambilKunci(actionId: string, sessionId: IdSesiKasus): Promise<MetadataIdempoten | null>;
-  simpanKunci(metadata: MetadataIdempoten): Promise<void>;
+  ambilKunci(actionId: string, sessionId: IdSesiKasus, transaction?: Transaction): Promise<MetadataIdempoten | null>;
+  simpanKunci(metadata: MetadataIdempoten, transaction?: Transaction): Promise<void>;
 }

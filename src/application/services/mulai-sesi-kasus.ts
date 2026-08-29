@@ -1,9 +1,10 @@
+import type { Transaction } from "firebase-admin/firestore";
 import { StatusSesi } from "../../domain/enums.js";
 import type { Grup, SesiKasus } from "../../domain/entities.js";
 import { JenisKejadianDomain, type KejadianDomain } from "../../event/domain.js";
 import { KesalahanValidasi, KesalahanIdempoten } from "../../fondasi/eror.js";
 import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
-import { buatIdSesiKasus, buatWaktuIso, type IdGrup, type IdKasus, type IdPemain, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
+import { buatIdSesiKasus, buatWaktuIso, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
 import type { KontrakIdempoten } from "../../event/domain.js";
 import type { VersiKasus } from "../../kasus/versi-kasus.js";
 import { StatusVersiKasus } from "../../kasus/versi-kasus.js";
@@ -23,9 +24,9 @@ export interface RepositoriVersiKasus {
 }
 
 export interface RepositoriSesiKasus {
-  ambil(sessionId: string): Promise<SesiKasus | null>;
-  simpan(sesi: SesiKasus): Promise<SesiKasus>;
-  transaksi<T>(runner: (transaction: unknown) => Promise<T>): Promise<T>;
+  ambil(sessionId: IdSesiKasus, transaction?: Transaction): Promise<SesiKasus | null>;
+  simpan(sesi: SesiKasus, transaction?: Transaction): Promise<SesiKasus>;
+  transaksi<T>(runner: (transaction: Transaction) => Promise<T>): Promise<T>;
 }
 
 export interface RepositoriGrup {
@@ -61,18 +62,15 @@ export class MulaiSesiKasusLayanan {
         return gagal(new KesalahanValidasi("Versi kasus belum dipublish."));
       }
 
-      const kunci = await this.konfigurasi.kontrakIdempoten.ambilKunci(input.sourceActionId, buatIdSesiKasus(`${input.groupId}:${input.caseId}`));
-      if (kunci) {
-        return gagal(new KesalahanIdempoten("Aksi start case sudah diproses."));
-      }
-
       const grup = await this.konfigurasi.repositoriGrup.ambil(input.groupId);
       if (!grup) {
         return gagal(new KesalahanValidasi("Grup tidak ditemukan."));
       }
 
-      const sesiBaru: SesiKasus = {
-        sessionId: buatIdSesiKasus(`${input.groupId}:${input.caseId}:${input.idUpdateTelegram}`),
+      const idSesiKasus = buatIdSesiKasus(`${input.groupId}:${input.caseId}:${input.idUpdateTelegram}`) as IdSesiKasus;
+
+      const sesiBaru = {
+        sessionId: idSesiKasus,
         caseId: input.caseId,
         caseVersionId: input.caseVersionId,
         groupId: input.groupId,
@@ -85,33 +83,33 @@ export class MulaiSesiKasusLayanan {
         teamTheory: null,
         score: 0,
         updatedAt: this.konfigurasi.waktu.sekarangIso(),
-      };
+      } as SesiKasus;
 
-      const sesiDitetapkan = await this.konfigurasi.repositoriSesiKasus.transaksi(async () => {
-        const sesiAda = await this.konfigurasi.repositoriSesiKasus.ambil(sesiBaru.sessionId);
+      const sesiDitetapkan = await this.konfigurasi.repositoriSesiKasus.transaksi(async (transaction) => {
+        const sesiAda = await this.konfigurasi.repositoriSesiKasus.ambil(sesiBaru.sessionId as IdSesiKasus, transaction);
         if (sesiAda) {
           throw new KesalahanIdempoten("Sesi kasus sudah ada untuk update Telegram ini.");
         }
 
-        const disimpan = await this.konfigurasi.repositoriSesiKasus.simpan({
-          ...sesiBaru,
-          status: StatusSesi.LOBBY,
-        });
+        const kunci = await this.konfigurasi.kontrakIdempoten.ambilKunci(input.sourceActionId, sesiBaru.sessionId as IdSesiKasus, transaction);
+        if (kunci) {
+          throw new KesalahanIdempoten("Aksi start case sudah diproses.");
+        }
 
-        const sesiMulai = {
-          ...disimpan,
+        const sesiMulai: SesiKasus = {
+          ...sesiBaru,
           status: StatusSesi.OPEN,
           startedAt: this.konfigurasi.waktu.sekarangIso(),
           lastActivityAt: this.konfigurasi.waktu.sekarangIso(),
         };
 
+        await this.konfigurasi.repositoriSesiKasus.simpan(sesiMulai, transaction);
+
         await this.konfigurasi.kontrakIdempoten.simpanKunci({
           actionId: input.sourceActionId,
           sessionId: sesiMulai.sessionId as any,
           repeated: false,
-        });
-
-        await this.konfigurasi.repositoriSesiKasus.simpan(sesiMulai);
+        }, transaction);
 
         return sesiMulai;
       });
