@@ -1,11 +1,11 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type { Grup } from "../../../domain/entities.js";
 import type { IdGrup } from "../../../fondasi/primitif.js";
 import { mapErrorFirestore } from "../../firebase/error-mapper.js";
 
 export interface KontrakRepositoriGrupFirestore {
-  ambil(groupId: IdGrup): Promise<Grup | null>;
-  simpan(grup: Grup): Promise<Grup>;
+  ambil(groupId: IdGrup, transaction?: Transaction): Promise<Grup | null>;
+  simpan(grup: Grup, transaction?: Transaction): Promise<Grup>;
 }
 
 export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
@@ -13,11 +13,11 @@ export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
 
   private readonly namaKoleksi = "groups";
 
-  ambil(groupId: IdGrup): Promise<Grup | null> {
-    return this.firestore
-      .collection(this.namaKoleksi)
-      .doc(String(groupId))
-      .get()
+  ambil(groupId: IdGrup, transaction?: Transaction): Promise<Grup | null> {
+    const dokumenRef = this.firestore.collection(this.namaKoleksi).doc(String(groupId));
+    const operasiDokumen = transaction ? transaction.get(dokumenRef) : dokumenRef.get();
+
+    return Promise.resolve(operasiDokumen)
       .then((dokumen) => {
         if (!dokumen.exists) {
           return null;
@@ -31,9 +31,16 @@ export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
       });
   }
 
-  async simpan(grup: Grup): Promise<Grup> {
+  async simpan(grup: Grup, transaction?: Transaction): Promise<Grup> {
     try {
-      await this.firestore.collection(this.namaKoleksi).doc(String(grup.groupId)).set(this.serialize(grup));
+      const dokumenRef = this.firestore.collection(this.namaKoleksi).doc(String(grup.groupId));
+
+      if (transaction) {
+        transaction.set(dokumenRef, this.serialize(grup));
+        return grup;
+      }
+
+      await dokumenRef.set(this.serialize(grup));
       return grup;
     } catch (error) {
       throw mapErrorFirestore(error);

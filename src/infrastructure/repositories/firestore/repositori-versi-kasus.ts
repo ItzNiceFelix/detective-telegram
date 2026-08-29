@@ -5,6 +5,7 @@ import type { VersiKasus } from "../../../kasus/versi-kasus.js";
 
 export interface KontrakRepositoriVersiKasusFirestore {
   ambilVersiKasus(caseId: IdKasus, versionId: IdVersiKasus): Promise<VersiKasus | null>;
+  ambilVersiKasusTerbitan(): Promise<VersiKasus | null>;
   simpanVersiKasus(versi: VersiKasus): Promise<VersiKasus>;
 }
 
@@ -20,6 +21,27 @@ export class RepositoriVersiKasusFirestore implements KontrakRepositoriVersiKasu
       .get()
       .then((dokumen) => {
         if (!dokumen.exists) {
+          return null;
+        }
+
+        return this.deserialize(dokumen.data() ?? {});
+      })
+      .catch((error) => {
+        throw mapErrorFirestore(error);
+      });
+  }
+
+  ambilVersiKasusTerbitan(): Promise<VersiKasus | null> {
+    return this.firestore
+      .collection(this.namaKoleksi)
+      .get()
+      .then((snapshot) => {
+        const dokumen = snapshot.docs.find((item) => {
+          const data = item.data() as Record<string, unknown> | undefined;
+          return data?.status === "PUBLISHED";
+        });
+
+        if (!dokumen) {
           return null;
         }
 
