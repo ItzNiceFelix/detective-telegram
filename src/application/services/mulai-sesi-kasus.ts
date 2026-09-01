@@ -83,6 +83,9 @@ export class MulaiSesiKasusLayanan {
         teamTheory: null,
         score: 0,
         updatedAt: this.konfigurasi.waktu.sekarangIso(),
+        unlockedStatementIds: [],
+        discoveredContradictionIds: [],
+        knownTimelineEventIds: [],
       } as SesiKasus;
 
       const sesiDitetapkan = await this.konfigurasi.repositoriSesiKasus.transaksi(async (transaction) => {

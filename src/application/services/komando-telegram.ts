@@ -159,6 +159,9 @@ export class KomandoTelegramLayanan {
       teamTheory: null,
       score: 0,
       updatedAt: this.konfigurasi.waktu.sekarangIso(),
+      unlockedStatementIds: [],
+      discoveredContradictionIds: [],
+      knownTimelineEventIds: [],
     };
 
     const sesiDisimpan = await this.konfigurasi.repositoriSesiKasus.transaksi(async (transaction) => {

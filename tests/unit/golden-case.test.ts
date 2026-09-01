@@ -22,6 +22,9 @@ test("Golden Case: OPEN -> investigate -> inspect semua object -> evidence sesua
     teamTheory: null,
     score: 0,
     updatedAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
+    unlockedStatementIds: [],
+    discoveredContradictionIds: [],
+    knownTimelineEventIds: [],
   };
 
   const pemain = buatIdPemain("user-1");

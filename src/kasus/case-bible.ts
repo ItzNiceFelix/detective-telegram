@@ -183,7 +183,6 @@ export interface CaseBible {
   proofNodes: NodeBukti[];
   proofEdges: EdgeBukti[];
   contradictionDefinitions: DefinisiKontradiksi[];
-  culpritSuspectId: string;
   motiveId: string;
   methodId: string;
 }

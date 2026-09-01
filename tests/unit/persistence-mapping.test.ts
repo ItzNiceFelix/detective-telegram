@@ -51,6 +51,9 @@ const sesiAwal: SesiKasus = {
   updatedAt: "2026-01-03T00:00:00.000Z",
   lastActivityAt: "2026-01-03T00:00:00.000Z",
   solvedAt: undefined,
+  unlockedStatementIds: [],
+  discoveredContradictionIds: [],
+  knownTimelineEventIds: [],
 };
 
 test("repositori pengguna memetakan field penting domain ke Firestore dan balik", async () => {

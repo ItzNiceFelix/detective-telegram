@@ -7,20 +7,6 @@ import { evaluasiGrafPembuktian, type StatusDukunganBukti } from "./graf-pembukt
 export type { TeoriKasus } from "../kontrak-resolusi.js";
 import type { TeoriKasus } from "../kontrak-resolusi.js";
 
-export interface TeoriKasus {
-  theoryId: string;
-  sessionId: string;
-  updatedBy: string;
-  culpritSuspectId: string | null;
-  motiveId: string | null;
-  methodId: string | null;
-  timelineHypothesisEventIds: string[];
-  evidenceRefs: string[];
-  createdAt: WaktuIso;
-  updatedAt: WaktuIso;
-  support: StatusDukunganBukti;
-}
-
 export interface HasilPerbaruiTeori {
   sesi: SesiKasus;
   teori: TeoriKasus;

@@ -6,29 +6,6 @@ import type { CaseBible } from "../../kasus/case-bible.js";
 export type { ProposalTuduhan, TuduhanAkhir, StatusProposalTuduhan } from "../kontrak-resolusi.js";
 import type { ProposalTuduhan, TuduhanAkhir } from "../kontrak-resolusi.js";
 
-export type StatusProposalTuduhan = "OPEN" | "QUALIFIED" | "REJECTED" | "EXPIRED" | "FINALIZED";
-
-export interface ProposalTuduhan {
-  proposalId: string;
-  sessionId: string;
-  suspectId: string;
-  motiveId?: string | null;
-  methodId?: string | null;
-  proposerId: string;
-  votes: string[]; // userId list, unique
-  status: StatusProposalTuduhan;
-  createdAt: WaktuIso;
-  qualifiedAt?: WaktuIso;
-}
-
-export interface TuduhanAkhir {
-  suspectId: string;
-  motiveId?: string | null;
-  methodId?: string | null;
-  resolvedAt: WaktuIso;
-  correctCulprit: boolean;
-}
-
 function hitungKuorum(jumlahDetektifAktif: number): number {
   if (jumlahDetektifAktif <= 1) return 1;
   return Math.floor(jumlahDetektifAktif / 2) + 1;
