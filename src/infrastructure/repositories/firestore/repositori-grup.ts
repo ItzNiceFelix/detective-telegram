@@ -61,7 +61,7 @@ export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
     return {
       groupId: String(data.groupId) as IdGrup,
       telegramChatId: String(data.telegramChatId),
-      createdAt: String(data.createdAt),
+      createdAt: String(data.createdAt) as Grup["createdAt"],
       status: data.status as Grup["status"],
       activeCaseSessionId: typeof data.activeCaseSessionId === "string" ? data.activeCaseSessionId as Grup["activeCaseSessionId"] : undefined,
     };

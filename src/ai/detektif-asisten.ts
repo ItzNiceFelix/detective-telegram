@@ -23,10 +23,10 @@ export function bersihkanPertanyaanAsisten(value: string): string {
   return teks.slice(0, 200);
 }
 
-export function buatResponsAsistenDetektif(
+export async function buatResponsAsistenDetektif(
   konteks: KonteksAsistenDetektif,
   provider?: PintuAi,
-): HasilAsistenDetektif {
+): Promise<HasilAsistenDetektif> {
   const pertanyaan = bersihkanPertanyaanAsisten(konteks.pertanyaanPemain);
   if (!pertanyaan) {
     throw new KesalahanValidasi("Pertanyaan pemain tidak boleh kosong.");
@@ -54,21 +54,22 @@ export function buatResponsAsistenDetektif(
     maxTokens: 180,
   };
 
-  return provider.generateText(request)
-    .then((hasil: ResponAi) => {
-      const output = String(hasil.output ?? "").trim();
-      if (output.length === 0 || output.length > 400) {
-        throw new KesalahanValidasi("Asisten detektif menghasilkan output di luar kontrak.");
-      }
+  try {
+    const hasil: ResponAi = await provider.generateText(request);
+    const output = String(hasil.output ?? "").trim();
+    if (output.length === 0 || output.length > 400) {
+      throw new KesalahanValidasi("Asisten detektif menghasilkan output di luar kontrak.");
+    }
 
-      if (/(final solution|culprit|murderer|secret truth|unlock all|you know)/i.test(output)) {
-        throw new KesalahanValidasi("Asisten detektif tidak boleh merangkum solusi yang tersembunyi.");
-      }
+    if (/(final solution|culprit|murderer|secret truth|unlock all|you know)/i.test(output)) {
+      throw new KesalahanValidasi("Asisten detektif tidak boleh merangkum solusi yang tersembunyi.");
+    }
 
-      return { jawaban: output, aman: true };
-    })
-    .catch(() => ({
+    return { jawaban: output, aman: true };
+  } catch {
+    return {
       jawaban: `Saya hanya dapat membahas fakta yang sudah diketahui: ${ringkasan || "belum ada fakta yang terbuka"}. Pertanyaan Anda: ${pertanyaan}.`,
       aman: true,
-    }));
+    };
+  }
 }

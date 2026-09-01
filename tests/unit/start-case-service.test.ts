@@ -45,7 +45,7 @@ test("mulai sesi kasus membuat session LOBBY lalu OPEN dan mengirim event", asyn
       ambil: async () => ({
         groupId: buatIdGrup("group-1"),
         telegramChatId: "-1001",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
         status: "ACTIVE" as const,
       }),
       simpan: async (grup) => grup,
@@ -120,7 +120,7 @@ test("mulai sesi kasus memanfaatkan transaction yang sama untuk read/write sesi 
       ambil: async () => ({
         groupId: buatIdGrup("group-3"),
         telegramChatId: "-1003",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
         status: "ACTIVE" as const,
       }),
       simpan: async (grup) => grup,
@@ -190,7 +190,7 @@ test("mulai sesi kasus menolak case version belum publish", async () => {
       ambil: async () => ({
         groupId: buatIdGrup("group-2"),
         telegramChatId: "-2001",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
         status: "ACTIVE",
       }),
       simpan: async (grup) => grup,

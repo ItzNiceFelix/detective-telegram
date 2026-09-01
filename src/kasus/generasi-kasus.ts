@@ -164,8 +164,8 @@ function normalisasiKandidatKasus(
   const title = bacaString(kandidatRecord, "title") ?? caseBible.title ?? "Case Title";
   const premise = bacaString(kandidatRecord, "premise") ?? "Premise belum dibuat.";
   const genre = bacaString(kandidatRecord, "genre") ?? benih.genre ?? "MYSTERY";
-  const caseId = chooseCaseId(kandidatRecord, caseBible.caseId);
-  const versionId = chooseVersionId(kandidatRecord, caseId, benih);
+  const caseId = chooseCaseId(kandidatRecord, caseBible.caseId) as CaseBible["caseId"];
+  const versionId = chooseVersionId(kandidatRecord, String(caseId), benih);
   const generatedAt = new Date().toISOString();
 
   const kandidat: KandidatKasus = {
@@ -213,7 +213,7 @@ function chooseVersionId(record: Record<string, unknown>, caseId: string, benih:
 function normalisasiCaseBible(value: Record<string, unknown>, benih: BenihKasus): CaseBible {
   const caseBible: Partial<CaseBible> = {
     caseBibleRef: pilihString(value.caseBibleRef, `case-bible:${benih.genre}:${Date.now()}`),
-    caseId: pilihString(value.caseId, `CASE-${Date.now().toString(36).toUpperCase()}`),
+    caseId: pilihString(value.caseId, `CASE-${Date.now().toString(36).toUpperCase()}`) as CaseBible["caseId"],
     title: pilihString(value.title, `${benih.genre} in ${benih.setting}`),
     victim: pilihString(value.victim, "Victim"),
     culpritSuspectId: pilihString(value.culpritSuspectId, "S01"),
@@ -280,7 +280,7 @@ function normalisasiCaseBible(value: Record<string, unknown>, benih: BenihKasus)
     dialogueNodes: Array.isArray(value.dialogueNodes) ? (value.dialogueNodes as unknown[]).map((item) => isRecord(item) ? {
       nodeId: pilihString(item.nodeId, "D01"),
       suspectId: pilihString(item.suspectId, "S01"),
-      intents: Array.isArray(item.intents) ? item.intents.filter((entry): entry is string => typeof entry === "string") : [],
+      intents: (Array.isArray(item.intents) ? item.intents.filter((entry): entry is string => typeof entry === "string") : []).map((entry) => entry as "ASK_ALIBI" | "ASK_VICTIM" | "ASK_MOTIVE" | "ASK_TIMELINE" | "ASK_RELATIONSHIP" | "ASK_EVIDENCE" | "CONFRONT_EVIDENCE"),
       prasyarat: Array.isArray(item.prasyarat) ? item.prasyarat.map((prasyarat) => isRecord(prasyarat) ? {
         jenis: choosePrasyaratJenis(prasyarat.jenis),
         evidenceId: typeof prasyarat.evidenceId === "string" ? prasyarat.evidenceId : undefined,
@@ -524,6 +524,9 @@ export function validasiLinimasa(kandidat: KandidatKasus): void {
   for (let indeks = 1; indeks < events.length; indeks += 1) {
     const sebelumnya = events[indeks - 1];
     const saatIni = events[indeks];
+    if (!sebelumnya || !saatIni) {
+      continue;
+    }
     if (bandingkanWaktu(saatIni, sebelumnya) < 0) {
       throw new KesalahanValidasi(`Timeline tidak terurut: ${sebelumnya.eventId} > ${saatIni.eventId}`);
     }
@@ -769,7 +772,7 @@ export function ujiKeterpecahanKasus(kandidat: KandidatKasus): boolean {
 }
 
 export function ujiKeunikanSolusi(kandidat: KandidatKasus): boolean {
-  const candidateSolutions = (kandidat.caseBible as Record<string, unknown>).solutionCandidates;
+  const candidateSolutions = (kandidat as unknown as Record<string, unknown>).solutionCandidates;
   if (Array.isArray(candidateSolutions)) {
     return candidateSolutions.length === 1;
   }

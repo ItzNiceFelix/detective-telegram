@@ -93,17 +93,19 @@ export class LayananResolusiKasus {
         const sesiTerkini = await this.konfigurasi.repositoriSesi.ambil(request.sessionId, transaction);
         if (!sesiTerkini) throw new KesalahanValidasi("Sesi kasus tidak ditemukan.");
 
+        const payloadTeori = {
+          ...(request.culpritSuspectId !== undefined ? { culpritSuspectId: request.culpritSuspectId } : {}),
+          ...(request.motiveId !== undefined ? { motiveId: request.motiveId } : {}),
+          ...(request.methodId !== undefined ? { methodId: request.methodId } : {}),
+          ...(request.timelineHypothesisEventIds !== undefined ? { timelineHypothesisEventIds: request.timelineHypothesisEventIds } : {}),
+          ...(request.evidenceRefs !== undefined ? { evidenceRefs: request.evidenceRefs } : {}),
+        };
+
         const hasilTeori = buatAtauPerbaruiTeori(
           sesiTerkini,
           caseBible,
           String(request.userId),
-          {
-            culpritSuspectId: request.culpritSuspectId,
-            motiveId: request.motiveId,
-            methodId: request.methodId,
-            timelineHypothesisEventIds: request.timelineHypothesisEventIds,
-            evidenceRefs: request.evidenceRefs,
-          },
+          payloadTeori,
           waktuSekarang,
         );
 
@@ -146,8 +148,8 @@ export class LayananResolusiKasus {
         if (!sesiTerkini) throw new KesalahanValidasi("Sesi kasus tidak ditemukan.");
 
         const hasilProposal = ajukanTuduhan(sesiTerkini, String(request.userId), request.suspectId, waktuSekarang, {
-          motiveId: request.motiveId,
-          methodId: request.methodId,
+          ...(request.motiveId !== undefined ? { motiveId: request.motiveId } : {}),
+          ...(request.methodId !== undefined ? { methodId: request.methodId } : {}),
         });
 
         await this.konfigurasi.repositoriSesi.simpan(hasilProposal.sesi, transaction);

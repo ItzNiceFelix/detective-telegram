@@ -21,14 +21,14 @@ const penggunaAwal: Pengguna = {
   telegramUserId: "tg-user-1",
   usernameSnapshot: "detective-1",
   language: "id",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  lastActiveAt: "2026-01-02T00:00:00.000Z",
+  createdAt: "2026-01-01T00:00:00.000Z" as any,
+  lastActiveAt: "2026-01-02T00:00:00.000Z" as any,
 };
 
 const grupAwal: Grup = {
   groupId: "group-1" as any,
   telegramChatId: "-100123",
-  createdAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2026-01-01T00:00:00.000Z" as any,
   status: "ACTIVE",
   activeCaseSessionId: "session-1" as any,
 };
@@ -47,9 +47,9 @@ const sesiAwal: SesiKasus = {
   unlockedDialogueIds: ["dialogue-1"],
   teamTheory: "teori awal",
   score: 150,
-  startedAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-03T00:00:00.000Z",
-  lastActivityAt: "2026-01-03T00:00:00.000Z",
+  startedAt: "2026-01-01T00:00:00.000Z" as any,
+  updatedAt: "2026-01-03T00:00:00.000Z" as any,
+  lastActivityAt: "2026-01-03T00:00:00.000Z" as any,
   solvedAt: undefined,
   unlockedStatementIds: [],
   discoveredContradictionIds: [],

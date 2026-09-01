@@ -108,7 +108,7 @@ export function periksaObjek(
       sesi,
       observasi,
       evidenceBaruDitemukan: false,
-      evidenceId: objek.evidenceId,
+      ...(objek.evidenceId ? { evidenceId: objek.evidenceId } : {}),
       sudahDiperiksaSebelumnya: true,
     };
   }

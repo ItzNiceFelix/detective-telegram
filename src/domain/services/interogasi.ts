@@ -36,13 +36,13 @@ export function normalisasiMaksud(inputBebas: string): MaksudInterogasi {
 function evaluasiSatuPrasyarat(sesi: SesiKasus, syarat: PrasyaratDialog): boolean {
   switch (syarat.jenis) {
     case "EVIDENCE_DISCOVERED":
-      return sesi.discoveredEvidenceIds.includes(syarat.evidenceId);
+      return typeof syarat.evidenceId === "string" && sesi.discoveredEvidenceIds.includes(syarat.evidenceId);
     case "STATEMENT_UNLOCKED":
-      return sesi.unlockedStatementIds.includes(syarat.statementId);
+      return typeof syarat.statementId === "string" && sesi.unlockedStatementIds.includes(syarat.statementId);
     case "DIALOGUE_NODE_UNLOCKED":
-      return sesi.unlockedDialogueIds.includes(syarat.nodeId);
+      return typeof syarat.nodeId === "string" && sesi.unlockedDialogueIds.includes(syarat.nodeId);
     case "CONTRADICTION_DISCOVERED":
-      return sesi.discoveredContradictionIds.includes(syarat.contradictionId);
+      return typeof syarat.contradictionId === "string" && sesi.discoveredContradictionIds.includes(syarat.contradictionId);
     default:
       return false;
   }
@@ -116,16 +116,17 @@ export function interogasiTersangka(
   }
 
   const unlockedDialogueIdsBaru = [...sesi.unlockedDialogueIds, node.nodeId];
-  const statementBaruDiunlock = Boolean(node.unlocksStatementId) && !sesi.unlockedStatementIds.includes(node.unlocksStatementId!);
-  const unlockedStatementIdsBaru = statementBaruDiunlock
-    ? [...sesi.unlockedStatementIds, node.unlocksStatementId!]
+  const kandidatStatementBaru = node.unlocksStatementId;
+  const statementBaruDiunlock = Boolean(kandidatStatementBaru) && !sesi.unlockedStatementIds.includes(kandidatStatementBaru!);
+  const unlockedStatementIdsBaru = statementBaruDiunlock && kandidatStatementBaru
+    ? [...sesi.unlockedStatementIds, kandidatStatementBaru]
     : sesi.unlockedStatementIds;
 
   return {
     sesi: {
       ...sesi,
       unlockedDialogueIds: unlockedDialogueIdsBaru,
-      unlockedStatementIds: unlockedStatementIdsBaru,
+      ...(statementBaruDiunlock && kandidatStatementBaru ? { unlockedStatementIds: unlockedStatementIdsBaru } : {}),
       lastActivityAt: waktuSekarang,
       updatedAt: waktuSekarang,
     },

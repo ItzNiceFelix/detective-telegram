@@ -73,7 +73,7 @@ export function berikanSuaraTuduhan(
     ...proposal,
     votes: votesBaru,
     status: qualifiedSekarang ? "QUALIFIED" : proposal.status,
-    qualifiedAt: qualifiedSekarang ? waktuSekarang : proposal.qualifiedAt,
+    ...(qualifiedSekarang ? { qualifiedAt: waktuSekarang } : proposal.qualifiedAt ? { qualifiedAt: proposal.qualifiedAt } : {}),
   };
 
   return {

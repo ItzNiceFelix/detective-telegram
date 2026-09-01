@@ -11,8 +11,8 @@ export interface ObjekDapatDiperiksa {
   sceneId: string;
   name: string;
   modeDiscovery: ModeDiscovery;
-  prasyarat?: SyaratDiscovery[];
-  evidenceId?: string;
+  prasyarat?: SyaratDiscovery[] | undefined;
+  evidenceId?: string | undefined;
 }
 
 export interface Observasi {
@@ -66,10 +66,10 @@ export interface Pernyataan {
 // ============ PRASYARAT DIALOG (prerequisite rule, minimal) ============
 
 export type PrasyaratDialog =
-  | { jenis: "EVIDENCE_DISCOVERED"; evidenceId: string }
-  | { jenis: "STATEMENT_UNLOCKED"; statementId: string }
-  | { jenis: "DIALOGUE_NODE_UNLOCKED"; nodeId: string }
-  | { jenis: "CONTRADICTION_DISCOVERED"; contradictionId: string };
+  | { jenis: "EVIDENCE_DISCOVERED"; evidenceId?: string | undefined }
+  | { jenis: "STATEMENT_UNLOCKED"; statementId?: string | undefined }
+  | { jenis: "DIALOGUE_NODE_UNLOCKED"; nodeId?: string | undefined }
+  | { jenis: "CONTRADICTION_DISCOVERED"; contradictionId?: string | undefined };
 
 export interface SemanticResponse {
   text: string;
@@ -90,8 +90,8 @@ export interface NodeDialog {
   intents: MaksudInterogasi[];
   prasyarat: PrasyaratDialog[];
   semanticResponse: SemanticResponse;
-  unlocksStatementId?: string;
-  unlocksNodeIds?: string[];
+  unlocksStatementId?: string | undefined;
+  unlocksNodeIds?: string[] | undefined;
 }
 
 // ============ TIMELINE ============
@@ -102,10 +102,10 @@ export interface PeristiwaLinimasa {
   eventId: string;
   timestamp: {
     precision: PresisiWaktu;
-    start?: string;
-    end?: string;
+    start?: string | undefined;
+    end?: string | undefined;
   };
-  locationId?: string;
+  locationId?: string | undefined;
   actorIds: string[];
   action: string;
   truthStatus: "TRUE" | "FALSE" | "PARTIAL" | "UNKNOWN";
@@ -156,8 +156,8 @@ export interface DefinisiKontradiksi {
   evidenceId: string;
   severity: Severitas;
   relatedSuspectId: string;
-  unlocksNodeId?: string;
-  revealsTimelineEventId?: string;
+  unlocksNodeId?: string | undefined;
+  revealsTimelineEventId?: string | undefined;
 }
 
 /**

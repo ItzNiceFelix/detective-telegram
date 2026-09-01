@@ -9,7 +9,7 @@ export interface KebutuhanVisual {
   id: string;
   label: string;
   entityId: string;
-  kind: "scene" | "object" | "evidence" | "suspect" | "timeline";
+  kind: "scene" | "object" | "evidence" | "suspect" | "timeline" | string;
 }
 
 export interface VisualPlan {
@@ -257,13 +257,7 @@ export async function hasilkanAsetGambar(
   }
 
   validator.validasiAset(asset);
-
-  const keyKanonik = repositori.ambilKunci(plan, caseId);
-  if (repositori instanceof RepositoriAsetVisualMemori) {
-    (repositori as RepositoriAsetVisualMemori & { aset: Map<string, AsetVisual> })["aset"].set(keyKanonik, asset);
-  } else {
-    repositori.simpan(asset);
-  }
+  repositori.simpan(asset);
 
   return asset;
 }

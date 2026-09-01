@@ -47,7 +47,7 @@ function buatLayanan() {
       ambil: async (groupId) => ({
         groupId: groupId ?? buatIdGrup("group-1"),
         telegramChatId: "-1001",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
         status: "ACTIVE",
         activeCaseSessionId: activeSessionByGroup[String(groupId)] as any,
       }),

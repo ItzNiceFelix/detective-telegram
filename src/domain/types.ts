@@ -1,4 +1,4 @@
-export type {
+import type {
   IdGrup,
   IdPemain,
   IdSesiKasus,
@@ -8,6 +8,17 @@ export type {
   WaktuIso,
   NomorVersi,
 } from "../fondasi/primitif.js";
+
+export type {
+  IdGrup,
+  IdPemain,
+  IdSesiKasus,
+  IdKasus,
+  IdVersiKasus,
+  IdEvent,
+  WaktuIso,
+  NomorVersi,
+};
 
 export type IdObyek = string;
 

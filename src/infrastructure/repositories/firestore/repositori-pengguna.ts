@@ -57,8 +57,8 @@ export class RepositoriPenggunaFirestore implements KontrakRepositoriPenggunaFir
       telegramUserId: String(data.telegramUserId),
       usernameSnapshot: typeof data.usernameSnapshot === "string" ? data.usernameSnapshot : undefined,
       language: String(data.language),
-      createdAt: String(data.createdAt),
-      lastActiveAt: typeof data.lastActiveAt === "string" ? data.lastActiveAt : undefined,
+      createdAt: String(data.createdAt) as Pengguna["createdAt"],
+      lastActiveAt: typeof data.lastActiveAt === "string" ? data.lastActiveAt as Pengguna["lastActiveAt"] : undefined,
     };
   }
 }

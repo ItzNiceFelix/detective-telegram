@@ -21,13 +21,13 @@ export interface ProposalTuduhan {
   proposalId: string;
   sessionId: string;
   suspectId: string;
-  motiveId?: string | null;
-  methodId?: string | null;
+  motiveId?: string | null | undefined;
+  methodId?: string | null | undefined;
   proposerId: string;
   votes: string[];
   status: StatusProposalTuduhan;
   createdAt: WaktuIso;
-  qualifiedAt?: WaktuIso;
+  qualifiedAt?: WaktuIso | undefined;
 }
 
 export interface TuduhanAkhir {
