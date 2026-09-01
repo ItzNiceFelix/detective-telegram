@@ -306,20 +306,47 @@ PLAYER 1-6
 - Vercel account connected to GitHub
 
 ### Environment Variables
-```bash
-# Required
-TELEGRAM_BOT_TOKEN="123456:ABC-DEF1234..."
-TELEGRAM_SECRET="webhook-secret-token"
-FIREBASE_PROJECT_ID="detective-telegram-prod"
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----..."
-FIREBASE_CLIENT_EMAIL="firebase-adminsdk-...@appspot.gserviceaccount.com"
-ADMIN_SECRET_TOKEN="admin-operations-secret"
 
-# Optional
-AI_PROVIDER="openai"  # or "anthropic", "gemini", "fake"
-AI_MODEL="gpt-4"
-OPENAI_API_KEY="sk-..."
-LOG_LEVEL="info"
+**Complete Setup Guide**: See [docs/ENV-SETUP.md](docs/ENV-SETUP.md) for step-by-step instructions on how to obtain each value.
+
+**Quick Reference**:
+```bash
+# Required (MUST set)
+TELEGRAM_BOT_TOKEN="123456:ABC-DEF1234..."        # From @BotFather
+TELEGRAM_SECRET="webhook-secret-token"             # Generated (32+ chars)
+FIREBASE_PROJECT_ID="detective-telegram-prod"      # From Firebase Console
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----..."  # From Service Account
+FIREBASE_CLIENT_EMAIL="firebase-adminsdk-...@appspot.gserviceaccount.com"
+ADMIN_SECRET_TOKEN="admin-operations-secret"       # Generated (32+ chars)
+
+# Optional (for AI features)
+AI_PROVIDER="openai"  # or "anthropic", "gemini", "fake" (default)
+AI_MODEL="gpt-4"      # Varies by provider
+OPENAI_API_KEY="sk-..."     # Only if using OpenAI
+ANTHROPIC_API_KEY="sk-ant-..." # Only if using Anthropic
+GOOGLE_GEMINI_API_KEY="AIza..." # Only if using Gemini
+
+# Optional (for observability)
+LOG_LEVEL="info"      # "debug", "info", "warn", "error"
+NODE_ENV="production" # "local", "staging", "production"
+```
+
+For detailed instructions on obtaining each value, see **[docs/ENV-SETUP.md](docs/ENV-SETUP.md)**.
+
+**Local Development**:
+```bash
+cp .env.example .env.local
+# Edit .env.local with your values
+# See docs/ENV-SETUP.md for complete setup guide
+npm run dev
+```
+
+**Vercel Deployment**:
+```bash
+# Set environment variables via Vercel dashboard
+# Vercel > Project > Settings > Environment Variables
+# Then deploy:
+vercel deploy --prod
 ```
 
 ### Deployment Flow
