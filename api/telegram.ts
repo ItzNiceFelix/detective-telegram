@@ -1,3 +1,4 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { KomandoTelegramLayanan } from "../src/application/services/komando-telegram.js";
 import { TelegramAdapter } from "../src/infrastructure/adapters/telegram/telegram.js";
 import { validasiWebhookSecret } from "../src/security/audit.js";
@@ -9,7 +10,9 @@ interface PermintaanHttpTelegram {
   body?: string | Record<string, unknown> | null;
 }
 
-export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ status: number; body: string; headers?: Record<string, string> }> {
+async function handlerInternal(
+  request: PermintaanHttpTelegram = {},
+): Promise<{ status: number; body: string; headers?: Record<string, string> }> {
   const method = request.method?.toUpperCase() ?? "POST";
 
   if (method === "GET") {
@@ -116,4 +119,20 @@ export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ s
     status: 200,
     body: JSON.stringify({ ok: false, error: hasil.error instanceof Error ? hasil.error.message : String(hasil.error) }),
   };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const hasil = await handlerInternal({
+    method: req.method,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    body: req.body,
+  });
+
+  if (hasil.headers) {
+    for (const [key, value] of Object.entries(hasil.headers)) {
+      res.setHeader(key, value);
+    }
+  }
+
+  res.status(hasil.status).send(hasil.body);
 }
