@@ -2,13 +2,14 @@
   "version": 2,
   "functions": {
     "api/**/*.ts": {
-      "runtime": "@vercel/node@3"
+      "runtime": "@vercel/node@3",
+      "maxDuration": 300
     }
   },
   "crons": [
     {
       "path": "/api/cron",
-      "schedule": "0 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
