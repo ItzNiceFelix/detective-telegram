@@ -19,3 +19,8 @@ export interface PintuAi {
 export interface PenjagaAi {
   validasiOutput(output: unknown): boolean;
 }
+
+export { FakeAiProvider, FakeAIProvider, PenyediaAiPalsu } from "./fake-provider.js";
+export * from "./visual-pipeline.js";
+export * from "./detektif-asisten.js";
+export type PenyediaAi = PintuAi;
