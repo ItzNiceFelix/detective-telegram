@@ -1,3 +1,4 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { validasiAdminToken } from "../src/security/audit.js";
 import { PenghitungBatasKejadian } from "../src/security/rate-limiter.js";
 
@@ -7,7 +8,7 @@ interface PermintaanHttpAdmin {
   body?: string | Record<string, unknown> | null;
 }
 
-export async function handler(request: PermintaanHttpAdmin = {}): Promise<{ status: number; body: string }> {
+async function handlerInternal(request: PermintaanHttpAdmin = {}): Promise<{ status: number; body: string }> {
   const method = request.method?.toUpperCase() ?? "POST";
 
   if (method === "GET") {
@@ -98,4 +99,14 @@ export async function handler(request: PermintaanHttpAdmin = {}): Promise<{ stat
     status: 400,
     body: JSON.stringify({ ok: false, error: "unsupported admin action" }),
   };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const hasil = await handlerInternal({
+    method: req.method,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    body: req.body,
+  });
+
+  res.status(hasil.status).send(hasil.body);
 }
