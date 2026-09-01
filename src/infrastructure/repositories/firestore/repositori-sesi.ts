@@ -56,7 +56,7 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
     }
   }
 
-  private serialize(sesi: SesiKasus): Record<string, unknown> {
+    private serialize(sesi: SesiKasus): Record<string, unknown> {
     return {
       sessionId: String(sesi.sessionId),
       caseId: String(sesi.caseId),
@@ -75,6 +75,9 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       updatedAt: sesi.updatedAt,
       lastActivityAt: sesi.lastActivityAt ?? null,
       solvedAt: sesi.solvedAt ?? null,
+      unlockedStatementIds: sesi.unlockedStatementIds,
+      discoveredContradictionIds: sesi.discoveredContradictionIds,
+      knownTimelineEventIds: sesi.knownTimelineEventIds,
     };
   }
 
@@ -97,6 +100,9 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : new Date().toISOString(),
       lastActivityAt: typeof data.lastActivityAt === "string" ? data.lastActivityAt : undefined,
       solvedAt: typeof data.solvedAt === "string" ? data.solvedAt : undefined,
+      unlockedStatementIds: Array.isArray(data.unlockedStatementIds) ? data.unlockedStatementIds.map(String) : [],
+      discoveredContradictionIds: Array.isArray(data.discoveredContradictionIds) ? data.discoveredContradictionIds.map(String) : [],
+      knownTimelineEventIds: Array.isArray(data.knownTimelineEventIds) ? data.knownTimelineEventIds.map(String) : [],
     };
   }
 }

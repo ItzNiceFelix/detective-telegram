@@ -55,6 +55,9 @@ export interface SesiKasus {
   updatedAt: WaktuIso;
   lastActivityAt?: WaktuIso | undefined;
   solvedAt?: WaktuIso | undefined;
+  unlockedStatementIds: string[];
+  discoveredContradictionIds: string[];
+  knownTimelineEventIds: string[];
 }
 
 export interface ObjekDapatDiperiksa {
