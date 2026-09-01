@@ -78,6 +78,13 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       unlockedStatementIds: sesi.unlockedStatementIds,
       discoveredContradictionIds: sesi.discoveredContradictionIds,
       knownTimelineEventIds: sesi.knownTimelineEventIds,
+      unlockedStatementIds: sesi.unlockedStatementIds,
+      discoveredContradictionIds: sesi.discoveredContradictionIds,
+      knownTimelineEventIds: sesi.knownTimelineEventIds,
+      currentTheory: sesi.currentTheory ?? null,
+      accusationProposal: sesi.accusationProposal ?? null,
+      finalAccusation: sesi.finalAccusation ?? null,
+      contributionRecordIds: sesi.contributionRecordIds ?? [],
     };
   }
 
@@ -103,6 +110,13 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       unlockedStatementIds: Array.isArray(data.unlockedStatementIds) ? data.unlockedStatementIds.map(String) : [],
       discoveredContradictionIds: Array.isArray(data.discoveredContradictionIds) ? data.discoveredContradictionIds.map(String) : [],
       knownTimelineEventIds: Array.isArray(data.knownTimelineEventIds) ? data.knownTimelineEventIds.map(String) : [],
+      unlockedStatementIds: Array.isArray(data.unlockedStatementIds) ? data.unlockedStatementIds.map(String) : [],
+      discoveredContradictionIds: Array.isArray(data.discoveredContradictionIds) ? data.discoveredContradictionIds.map(String) : [],
+      knownTimelineEventIds: Array.isArray(data.knownTimelineEventIds) ? data.knownTimelineEventIds.map(String) : [],
+      currentTheory: (data.currentTheory as SesiKasus["currentTheory"]) ?? null,
+      accusationProposal: (data.accusationProposal as SesiKasus["accusationProposal"]) ?? null,
+      finalAccusation: (data.finalAccusation as SesiKasus["finalAccusation"]) ?? null,
+      contributionRecordIds: Array.isArray(data.contributionRecordIds) ? data.contributionRecordIds.map(String) : [],
     };
   }
 }

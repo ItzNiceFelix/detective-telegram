@@ -1,5 +1,8 @@
 import type { IdGrup, IdKasus, IdPemain, IdSesiKasus, IdVersiKasus, WaktuIso } from "./types.js";
 import type { HasilSesi, RolePemain, StatusBukti, StatusSesi } from "./enums.js";
+import type { TeoriKasus } from "./services/teori.js";
+import type { ProposalTuduhan, TuduhanAkhir } from "./services/tuduhan.js";
+
 
 export interface Pengguna {
   userId: IdPemain;
@@ -58,6 +61,11 @@ export interface SesiKasus {
   unlockedStatementIds: string[];
   discoveredContradictionIds: string[];
   knownTimelineEventIds: string[];
+  currentTheory?: TeoriKasus | null | undefined;
+  accusationProposal?: ProposalTuduhan | null | undefined;
+  finalAccusation?: TuduhanAkhir | null | undefined;
+  contributionRecordIds?: string[] | undefined; // idempotency dedupe set, bounded (few dozen max)
+  resolutionSnapshotRef?: string | undefined;
 }
 
 export interface ObjekDapatDiperiksa {

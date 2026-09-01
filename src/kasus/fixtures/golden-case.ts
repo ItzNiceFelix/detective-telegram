@@ -12,7 +12,9 @@ export const goldenCaseBible: CaseBible = {
   caseId: buatIdKasus("CASE-001"),
   title: "The Blackwood Room",
   victim: "Jonathan Reed",
-  culpritSuspectId: "SUSPECT_MARCUS_BELL",
+  culpritSuspectId: "S01",
+  motiveId: "MOTIVE_INSURANCE_FRAUD",
+  methodId: "METHOD_POISON",
   scenes: [{ sceneId: "ROOM_407", name: "Room 407" }],
   objects: [
     {
@@ -143,11 +145,13 @@ export const goldenCaseBible: CaseBible = {
     { nodeId: "T02", kind: "EVENT" },
     { nodeId: "ST02", kind: "STATEMENT" },
     { nodeId: "PROOF_MARCUS_PRESENT", kind: "INFERENCE" },
+    { nodeId: "SOLUTION_MARCUS_GUILTY", kind: "SOLUTION_FACT" },
   ],
   proofEdges: [
     { dari: "E04", ke: "PROOF_MARCUS_PRESENT", relasi: "SUPPORTS", wajib: true },
     { dari: "T02", ke: "PROOF_MARCUS_PRESENT", relasi: "SUPPORTS", wajib: true },
     { dari: "ST02", ke: "PROOF_MARCUS_PRESENT", relasi: "SUPPORTS", wajib: false },
+    { dari: "PROOF_MARCUS_PRESENT", ke: "SOLUTION_MARCUS_GUILTY", relasi: "ESTABLISHES", wajib: true },
   ],
   contradictionDefinitions: [
     {
