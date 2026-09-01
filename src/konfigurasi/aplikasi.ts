@@ -8,6 +8,8 @@ export interface KonfigurasiAplikasi {
   defaultGroupSessionLimit: number;
   aiEnabled: boolean;
   telegramWebhookSecret?: string;
+  ambangInaktifJam: number;
+  ambangDinginJam: number;
 }
 
 export const konfigurasiDefault: KonfigurasiAplikasi = {
@@ -17,6 +19,8 @@ export const konfigurasiDefault: KonfigurasiAplikasi = {
   maxActivePlayers: 6,
   defaultGroupSessionLimit: 1,
   aiEnabled: false,
+  ambangInaktifJam: 48,
+  ambangDinginJam: 168,
 };
 
 export function validasiKonfigurasiAplikasi(konfigurasi: Partial<KonfigurasiAplikasi>): KonfigurasiAplikasi {
@@ -32,6 +36,14 @@ export function validasiKonfigurasiAplikasi(konfigurasi: Partial<KonfigurasiApli
 
   if (hasil.defaultGroupSessionLimit <= 0) {
     throw new KesalahanKonfigurasi("Batas sesi grup harus lebih dari nol.");
+  }
+
+  if (hasil.ambangInaktifJam <= 0) {
+    throw new KesalahanKonfigurasi("Ambang waktu inaktif harus lebih dari nol.");
+  }
+
+  if (hasil.ambangDinginJam <= hasil.ambangInaktifJam) {
+    throw new KesalahanKonfigurasi("Ambang waktu dingin harus lebih besar dari ambang inaktif.");
   }
 
   return hasil;
