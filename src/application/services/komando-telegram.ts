@@ -137,6 +137,11 @@ export class KomandoTelegramLayanan {
         return this.tampilkanStatus(groupId, chatId, permintaan.updateId);
       }
 
+      // /case — tampilkan info kasus aktif (caseId & version) bila ada.
+      if (command === "/case") {
+        return this.tampilkanInfoKasus(groupId, chatId, permintaan.updateId);
+      }
+
       return gagal(new KesalahanValidasi("Perintah tidak didukung."));
     } catch (error) {
       // Duplicate delivery (update yang sama di-retry Telegram) → safe replay:
@@ -377,6 +382,24 @@ export class KomandoTelegramLayanan {
     const pesan = `Status sesi: ${sesi.status} (${statusEfektif}). Progress: ${sesi.discoveredEvidenceIds.length} bukti ditemukan, ${sesi.playerIds.length} pemain.`;
     await this.kirimPesanAman(chatId, pesan, { command: "/status", updateId, sessionId: String(sesi.sessionId) });
     return berhasil({ command: "/status", message: pesan, session: sesi });
+  }
+
+  // Helper for /case command – show active case identifiers.
+  private async tampilkanInfoKasus(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      const msg = "Tidak ada kasus aktif untuk grup ini.";
+      await this.kirimPesanAman(chatId, msg, { command: "/case", updateId });
+      return berhasil({ command: "/case", message: msg });
+    }
+
+    const msg = `Kasus aktif: ${sesi.caseId} (versi ${sesi.caseVersionId}).`;
+    await this.kirimPesanAman(chatId, msg, { command: "/case", updateId, sessionId: String(sesi.sessionId) });
+    return berhasil({ command: "/case", message: msg, session: sesi });
   }
 
   private async ambilSesiAktifGrup(groupId: IdGrup, transaction?: Transaction): Promise<SesiKasus | null> {
