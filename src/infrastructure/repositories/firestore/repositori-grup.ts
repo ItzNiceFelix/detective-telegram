@@ -1,11 +1,12 @@
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type { Grup } from "../../../domain/entities.js";
 import type { IdGrup } from "../../../fondasi/primitif.js";
-import { mapErrorFirestore } from "../../firebase/error-mapper.js";
+import { apakahDokumenSudahAda, mapErrorFirestore } from "../../firebase/error-mapper.js";
 
 export interface KontrakRepositoriGrupFirestore {
   ambil(groupId: IdGrup, transaction?: Transaction): Promise<Grup | null>;
   simpan(grup: Grup, transaction?: Transaction): Promise<Grup>;
+  buatJikaTidakAda(grup: Grup, transaction?: Transaction): Promise<Grup>;
 }
 
 export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
@@ -43,6 +44,31 @@ export class RepositoriGrupFirestore implements KontrakRepositoriGrupFirestore {
       await dokumenRef.set(this.serialize(grup));
       return grup;
     } catch (error) {
+      throw mapErrorFirestore(error);
+    }
+  }
+
+  /**
+   * Membuat dokumen grup hanya bila belum ada (create-if-missing). Penting
+   * untuk wiring validasi grup: pendaftaran grup baru tidak boleh pernah
+   * menimpa `activeCaseSessionId` yang sudah ditulis oleh transaksi lain.
+   */
+  async buatJikaTidakAda(grup: Grup, transaction?: Transaction): Promise<Grup> {
+    const dokumenRef = this.firestore.collection(this.namaKoleksi).doc(String(grup.groupId));
+    const data = this.serialize(grup);
+
+    try {
+      if (transaction) {
+        transaction.create(dokumenRef, data);
+        return grup;
+      }
+
+      await dokumenRef.create(data);
+      return grup;
+    } catch (error) {
+      if (apakahDokumenSudahAda(error)) {
+        return grup;
+      }
       throw mapErrorFirestore(error);
     }
   }

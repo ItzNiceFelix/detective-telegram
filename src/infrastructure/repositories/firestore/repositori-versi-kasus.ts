@@ -32,15 +32,21 @@ export class RepositoriVersiKasusFirestore implements KontrakRepositoriVersiKasu
   }
 
   ambilVersiKasusTerbitan(): Promise<VersiKasus | null> {
+    // Query tertarget: single-field index otomatis pada `status`.
+    // Tidak melakukan full collection scan. Untuk closed beta invariant-nya
+    // satu published CaseVersion aktif; bila nanti butuh deterministik antar
+    // beberapa published version, tambahkan composite index (status, publishedAt).
     return this.firestore
       .collection(this.namaKoleksi)
+      .where("status", "==", "PUBLISHED")
+      .limit(1)
       .get()
       .then((snapshot) => {
-        const dokumen = snapshot.docs.find((item) => {
-          const data = item.data() as Record<string, unknown> | undefined;
-          return data?.status === "PUBLISHED";
-        });
+        if (snapshot.empty) {
+          return null;
+        }
 
+        const dokumen = snapshot.docs[0];
         if (!dokumen) {
           return null;
         }

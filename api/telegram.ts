@@ -1,7 +1,12 @@
-import { KomandoTelegramLayanan } from "../src/application/services/komando-telegram.js";
-import { TelegramAdapter } from "../src/infrastructure/adapters/telegram/telegram.js";
+import { dapatkanKomposisiAplikasi } from "../src/komposisi/komposisi-aplikasi.js";
 import { validasiWebhookSecret } from "../src/security/audit.js";
-import { PenghitungBatasKejadian } from "../src/security/rate-limiter.js";
+
+/**
+ * THIN ENTRYPOINT — Production Wiring Patch.
+ * Tidak ada business logic / inline stub di sini. Semua dependency runtime
+ * berasal dari composition root (src/komposisi/komposisi-aplikasi.ts).
+ * Alur: validate request → resolve context → invoke application service → response.
+ */
 
 interface PermintaanHttpTelegram {
   method?: string;
@@ -9,8 +14,28 @@ interface PermintaanHttpTelegram {
   body?: string | Record<string, unknown> | null;
 }
 
+function ambilHeaderNilaiTunggal(nilai: string | string[] | undefined): string {
+  return Array.isArray(nilai) ? nilai[0] ?? "" : nilai ?? "";
+}
+
 export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ status: number; body: string; headers?: Record<string, string> }> {
   const method = request.method?.toUpperCase() ?? "POST";
+
+  let komposisi;
+  try {
+    komposisi = dapatkanKomposisiAplikasi();
+  } catch (error) {
+    // Fail clearly saat credential wajib tidak tersedia — tanpa membocorkan detail secret.
+    console.error(JSON.stringify({
+      level: "error",
+      message: "komposisi_aplikasi_gagal",
+      error: error instanceof Error ? error.name : "unknown",
+    }));
+    return {
+      status: 500,
+      body: JSON.stringify({ ok: false, error: "service_not_configured" }),
+    };
+  }
 
   if (method === "GET") {
     return {
@@ -20,9 +45,8 @@ export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ s
   }
 
   const envSecret = process.env.TELEGRAM_SECRET ?? "";
-  const headerToken = request.headers?.["x-telegram-bot-api-secret-token"];
-  const tokenDariHeader = Array.isArray(headerToken) ? headerToken[0] : headerToken ?? "";
-  const keamananWebhook = validasiWebhookSecret(tokenDariHeader, envSecret);
+  const headerToken = ambilHeaderNilaiTunggal(request.headers?.["x-telegram-bot-api-secret-token"]);
+  const keamananWebhook = validasiWebhookSecret(headerToken, envSecret);
 
   if (!keamananWebhook.valid) {
     return {
@@ -31,13 +55,9 @@ export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ s
     };
   }
 
-  const limiter = new PenghitungBatasKejadian({
-    maxPermintaan: Number(process.env.RATE_LIMIT_MAX_ACTIONS ?? "30"),
-    jendelaMs: Number(process.env.RATE_LIMIT_WINDOW_SECONDS ?? "60") * 1000,
-  });
-  const rateKey = request.headers?.["x-forwarded-for"] ?? request.headers?.["x-real-ip"] ?? "telegram-global";
-  const ipKey = Array.isArray(rateKey) ? rateKey[0] : String(rateKey);
-  const hasilRate = limiter.periksa(ipKey || "telegram-global");
+  // Rate limiter milik composition root — bertahan lintas warm invocation.
+  const rateKey = ambilHeaderNilaiTunggal(request.headers?.["x-forwarded-for"]) || ambilHeaderNilaiTunggal(request.headers?.["x-real-ip"]) || "telegram-global";
+  const hasilRate = komposisi.penghitungBatasKejadian.periksa(rateKey);
   if (!hasilRate.diizinkan) {
     return {
       status: 429,
@@ -64,46 +84,17 @@ export async function handler(request: PermintaanHttpTelegram = {}): Promise<{ s
     };
   }
 
-  const adapter = new TelegramAdapter();
-  const update = adapter.parseUpdate(payload);
+  const update = komposisi.pengirimTelegram.parseUpdate(payload);
+  const punyaKonten = payload !== null && typeof payload === "object" && ("message" in (payload as Record<string, unknown>) || "callback_query" in (payload as Record<string, unknown>));
 
-  if (!update || !update.updateId) {
+  if (!update || !update.updateId || !punyaKonten) {
     return {
       status: 400,
       body: JSON.stringify({ ok: false, error: "unsupported telegram update" }),
     };
   }
 
-  const layanan = new KomandoTelegramLayanan({
-    repositoriVersiKasus: {
-      ambilVersiKasus: async () => null,
-      ambilVersiKasusTerbitan: async () => null,
-    },
-    repositoriSesiKasus: {
-      ambil: async () => null,
-      simpan: async (sesi) => sesi,
-      transaksi: async <T>(runner: (transaction: any) => Promise<T>): Promise<T> => runner({} as any),
-    },
-    repositoriGrup: {
-      ambil: async () => ({ telegramChatId: update.chatId ?? "stub-chat-id" }) as any,
-      simpan: async (grup) => grup,
-    },
-    penerbitEventDomain: {
-      kirim: async () => undefined,
-    },
-    kontrakIdempoten: {
-      ambilKunci: async () => null,
-      simpanKunci: async () => undefined,
-    },
-    waktu: {
-      sekarangIso: () => new Date().toISOString() as any,
-    },
-    kirimPesanTelegram: async () => undefined,
-    validasiAksesTelegram: async () => true,
-    validasiGroupTelegram: async () => true,
-  });
-
-  const hasil = await layanan.prosesUpdate(update);
+  const hasil = await komposisi.layananKomando.prosesUpdate(update);
 
   if (hasil.status === "berhasil") {
     return {

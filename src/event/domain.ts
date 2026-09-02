@@ -14,6 +14,8 @@ export enum JenisKejadianDomain {
   FINAL_ACCUSATION = "FINAL_ACCUSATION",
   CASE_CLEARED = "CASE_CLEARED",
   CASE_ARCHIVED = "CASE_ARCHIVED",
+  CASE_SESSION_CREATED = "CASE_SESSION_CREATED",
+  CASE_STARTED = "CASE_STARTED",
   CASE_PUBLISHED = "CASE_PUBLISHED",
   CASE_DISABLED = "CASE_DISABLED",
   USER_BLOCKED = "USER_BLOCKED",
@@ -38,6 +40,12 @@ export interface KejadianDomain {
 
 export interface PenerbitEventDomain {
   kirim(event: KejadianDomain): Promise<void>;
+  /**
+   * Menulis event secara atomic di dalam transaction Firestore yang sama
+   * dengan mutasi kanonik (docs/17.1 §3, PERSIST-04/07). Hanya untuk
+   * event persistence — external side effect tetap setelah commit.
+   */
+  tulisDalamTransaksi?(event: KejadianDomain, transaction: Transaction): void;
 }
 
 export interface PencatatEventDomain {
@@ -53,4 +61,15 @@ export interface MetadataIdempoten {
 export interface KontrakIdempoten {
   ambilKunci(actionId: string, sessionId: IdSesiKasus, transaction?: Transaction): Promise<MetadataIdempoten | null>;
   simpanKunci(metadata: MetadataIdempoten, transaction?: Transaction): Promise<void>;
+  /**
+   * Klaim atomic kunci idempotensi. Mengembalikan sudahAda=true ketika kunci
+   * sudah diklaim delivery lain (duplicate) — pemanggil wajib tidak menjalankan
+   * mutasi kanonik lagi. Implementasi Firestore memakai create() sehingga dua
+   * concurrent duplicate tidak mungkin sama-sama menang.
+   */
+  klaimKunci?(actionId: string, sessionId: IdSesiKasus, transaction?: Transaction): Promise<HasilKlaimIdempoten>;
+}
+
+export interface HasilKlaimIdempoten {
+  sudahAda: boolean;
 }

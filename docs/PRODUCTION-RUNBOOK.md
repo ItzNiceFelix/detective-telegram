@@ -25,21 +25,40 @@ ls -la .vercel/output/functions/api/
 # 4. Deploy to Vercel staging
 vercel deploy
 
-# 5. Run smoke test on staging
+# 5. Run smoke test (offline Production Smoke: /start → /newcase → /status → /startcase)
+npm run smoke
+
+# 6. Run smoke test on staging
 npm run test:smoke -- --url https://staging.your-project.vercel.app
 
-# 6. Deploy to production
+# 7. Deploy to production
 vercel deploy --prod
 
-# 7. Verify production deployment
+# 8. Verify production deployment
 curl https://your-project.vercel.app/api/health
 
-# 8. Test webhook with sample update
+# 9. Test webhook with sample update
 curl -X POST https://your-project.vercel.app/api/telegram \
   -H "Content-Type: application/json" \
   -H "X-Telegram-Bot-API-Secret-Token: $TELEGRAM_SECRET" \
   -d '{"update_id": 999, "message": {"chat": {"id": -123}, "text": "/help"}}'
 ```
+
+### Production Smoke (offline)
+
+`npm run smoke` menjalankan `tests/smoke-production.ts` — memvalidasi wiring produksi untuk
+4 perintah inti TANPA AI, TANPA jaringan nyata, TANPA endpoint baru:
+
+- `/start` — outbound `sendMessage` + pendaftaran grup (create-if-missing).
+- `/newcase` — satu sesi `LOBBY` + pointer `groups/{id}.activeCaseSessionId` + event
+  `CASE_SESSION_CREATED` atomic dalam transaction yang sama + kunci idempotensi.
+- `/status` — read-only, tidak memproduksi mutasi.
+- `/startcase` — `LOBBY → OPEN` + tepat satu `CASE_STARTED`; duplicate delivery
+  di-replay secara idempotent (tanpa mutasi kedua).
+
+Sumber content: published **Golden Case fixture** (`src/kasus/fixtures/golden-case.ts`).
+Firestore dan Telegram memakai fake in-memory (semantik transaction Firestore SDK);
+composition root (`src/komposisi/komposisi-aplikasi.ts`) adalah modul produksi asli.
 
 ### Rollback Procedure
 ```bash
