@@ -443,16 +443,19 @@ export class KomandoTelegramLayanan {
    * state (PERSIST-07, docs/22.7). Kegagalan dicatat dengan correlation ID.
    */
   private async kirimPesanAman(chatId: string, pesan: string, korelasi: { command: string; updateId: string; sessionId?: string }): Promise<void> {
-    try {
-      await this.konfigurasi.kirimPesanTelegram(chatId, pesan);
-    } catch (error) {
-      this.konfigurasi.logger?.warn?.("telegram_outbound_gagal_setelah_commit", {
-        ...korelasi,
-        chatId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  console.log(JSON.stringify({ debug: "mencoba_kirim", chatId, pesanPanjang: pesan.length, ...korelasi }));
+  try {
+    await this.konfigurasi.kirimPesanTelegram(chatId, pesan);
+    console.log(JSON.stringify({ debug: "kirim_sukses", chatId }));
+  } catch (error) {
+    console.log(JSON.stringify({
+      debug: "kirim_gagal",
+      ...korelasi,
+      chatId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
   }
+}
 
   private async validasiAdmin(userId: IdPemain, groupId: IdGrup): Promise<boolean> {
     const validatorAdmin = this.konfigurasi.validasiAdminGrup;
