@@ -30,6 +30,10 @@ export class FirestorePalsu {
   private readonly store = new Map<string, Map<string, DataDokumen>>();
   private antreanTransaksi: Promise<unknown> = Promise.resolve();
 
+  /** Audit I/O: setiap read/write tercatat (path dokumen). */
+  readonly riwayatBaca: string[] = [];
+  readonly riwayatTulis: string[] = [];
+
   private koleksiStore(nama: string): Map<string, DataDokumen> {
     let k = this.store.get(nama);
     if (!k) {
@@ -67,6 +71,11 @@ export class FirestorePalsu {
     return {
       doc: (id: string) => self.refDokumen(nama, id),
       where: (field: string, op: string, nilai: unknown) => self.buatQuery(nama, field, op, nilai),
+      async get() {
+        const sumber = self.koleksiStore(nama);
+        const docs = Array.from(sumber.entries()).map(([id, data]) => ({ id, exists: true, data: () => data }));
+        return { empty: docs.length === 0, docs };
+      },
     };
   }
 
@@ -85,11 +94,14 @@ export class FirestorePalsu {
   }
 
   private baca(nama: string, id: string) {
+    const key = `${nama}/${id}`;
+    this.riwayatBaca.push(key);
     const data = this.koleksiStore(nama).get(id);
     return { exists: data !== undefined, id, data: () => (data ? structuredClone(data) : undefined) };
   }
 
   private tulis(nama: string, id: string, data: DataDokumen) {
+    this.riwayatTulis.push(`${nama}/${id}`);
     this.koleksiStore(nama).set(id, structuredClone(data));
   }
 

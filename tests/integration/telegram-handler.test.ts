@@ -1,13 +1,16 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { Firestore } from "firebase-admin/firestore";
-import { handler } from "../../api/telegram.js";
+import handlerDefault, { handlerInternal } from "../../api/telegram.js";
 import { aturUlangKomposisiAplikasi, dapatkanKomposisiAplikasi } from "../../src/komposisi/komposisi-aplikasi.js";
 import { FirestorePalsu } from "./fake-firestore.js";
 import { buatFetchTelegramPalsu, buatVersiKasusEmasTerbitan } from "./fake-telegram.js";
 
 const SECRET_LAMA = process.env.TELEGRAM_SECRET;
+
+// Import default handler untuk verifikasi eksistensi (tanpa dipanggil langsung di sini).
+void handlerDefault;
 
 function siapkan(opsi: { statusAnggota?: Record<string, string>; maxPermintaan?: number } = {}) {
   aturUlangKomposisiAplikasi();
@@ -30,6 +33,17 @@ function permintaanWebhook(body: unknown, secret = "secret-test-123") {
   };
 }
 
+/** Buat mock response untuk menangkap output handler default. */
+function buatMockResponse(): { res: Record<string, unknown>; status: number; body: string; headers: Record<string, string> } {
+  const result = { status: 200, body: "", headers: {} as Record<string, string> };
+  const res = {
+    setHeader: (k: string, v: string) => { result.headers[k] = v; },
+    status: (s: number) => { result.status = s; return res; },
+    send: (b: string) => { result.body = b; },
+  } as unknown as Record<string, unknown>;
+  return { res, ...result };
+}
+
 test.afterEach(() => {
   aturUlangKomposisiAplikasi();
   if (SECRET_LAMA === undefined) {
@@ -39,37 +53,37 @@ test.afterEach(() => {
   }
 });
 
-test("GET → readiness tanpa menyentuh business logic", async () => {
+test("GET â†’ readiness tanpa menyentuh business logic", async () => {
   siapkan();
-  const hasil = await handler({ method: "GET" });
+  const hasil = await handlerInternal({ method: "GET" });
   assert.equal(hasil.status, 200);
   const body = JSON.parse(hasil.body) as { ok: boolean; status: string };
   assert.equal(body.ok, true);
   assert.equal(body.status, "ready");
 });
 
-test("webhook secret invalid → 401", async () => {
+test("webhook secret invalid â†’ 401", async () => {
   siapkan();
-  const hasil = await handler(permintaanWebhook({ update_id: 1 }, "secret-salah"));
+  const hasil = await handlerInternal(permintaanWebhook({ update_id: 1 }, "secret-salah"));
   assert.equal(hasil.status, 401);
 });
 
-test("webhook secret hilang → 401", async () => {
+test("webhook secret hilang â†’ 401", async () => {
   siapkan();
-  const hasil = await handler({ method: "POST", headers: {}, body: JSON.stringify({ update_id: 1 }) });
+  const hasil = await handlerInternal({ method: "POST", headers: {}, body: JSON.stringify({ update_id: 1 }) });
   assert.equal(hasil.status, 401);
 });
 
-test("malformed update (tanpa message) → 400 tanpa mutasi", async () => {
+test("malformed update (tanpa message) â†’ 400 tanpa mutasi", async () => {
   const { firestore } = siapkan();
-  const hasil = await handler(permintaanWebhook({ update_id: 2 }));
+  const hasil = await handlerInternal(permintaanWebhook({ update_id: 2 }));
   assert.equal(hasil.status, 400);
   assert.equal(firestore.jumlahDokumen("case_sessions"), 0);
 });
 
-test("JSON payload rusak → 400", async () => {
+test("JSON payload rusak â†’ 400", async () => {
   siapkan();
-  const hasil = await handler({ method: "POST", headers: { "x-telegram-bot-api-secret-token": "secret-test-123" }, body: "{bukan-json" });
+  const hasil = await handlerInternal({ method: "POST", headers: { "x-telegram-bot-api-secret-token": "secret-test-123" }, body: "{bukan-json" });
   assert.equal(hasil.status, 400);
 });
 
@@ -77,7 +91,7 @@ test("/start di grup menghasilkan outbound sendMessage", async () => {
   const { firestore, telegram } = siapkan({ statusAnggota: { "-1001:42": "member" } });
   await dapatkanKomposisiAplikasi().repositoriVersiKasus.simpanVersiKasus(buatVersiKasusEmasTerbitan());
 
-  const hasil = await handler(permintaanWebhook({
+  const hasil = await handlerInternal(permintaanWebhook({
     update_id: 3,
     message: { message_id: 3, text: "/start", chat: { id: -1001, type: "group" }, from: { id: 42, username: "u" } },
   }));
@@ -95,18 +109,18 @@ test("/start di grup menghasilkan outbound sendMessage", async () => {
   assert.ok(firestore.ambilDokumen("groups", "-1001"));
 });
 
-test("kegagalan Telegram API setelah commit → canonical state tetap, HTTP 200 aman", async () => {
+test("kegagalan Telegram API setelah commit â†’ canonical state tetap, HTTP 200 aman", async () => {
   const { firestore, telegram } = siapkan({ statusAnggota: { "-1001:42": "member" } });
   await dapatkanKomposisiAplikasi().repositoriVersiKasus.simpanVersiKasus(buatVersiKasusEmasTerbitan());
 
   telegram.gagalkanMetode("sendMessage", new Error("telegram down"));
 
-  const hasil = await handler(permintaanWebhook({
+  const hasil = await handlerInternal(permintaanWebhook({
     update_id: 4,
     message: { message_id: 4, text: "/newcase", chat: { id: -1001, type: "group" }, from: { id: 42, username: "u" } },
   }));
 
-  // Response tetap aman (200) — tidak ada rollback canonical state.
+  // Response tetap aman (200) â€” tidak ada rollback canonical state.
   assert.equal(hasil.status, 200);
   const body = JSON.parse(hasil.body) as { ok: boolean };
   assert.equal(body.ok, true);
@@ -114,9 +128,9 @@ test("kegagalan Telegram API setelah commit → canonical state tetap, HTTP 200 
   // Mutasi kanonik tetap ter-commit.
   assert.equal(firestore.jumlahDokumen("case_sessions"), 1);
 
-  // Retry Telegram dengan update yang sama → idempotent, tidak ada mutasi kedua.
+  // Retry Telegram dengan update yang sama â†’ idempotent, tidak ada mutasi kedua.
   telegram.gagalkanMetode("sendMessage", new Error("telegram down"));
-  const ulang = await handler(permintaanWebhook({
+  const ulang = await handlerInternal(permintaanWebhook({
     update_id: 4,
     message: { message_id: 4, text: "/newcase", chat: { id: -1001, type: "group" }, from: { id: 42, username: "u" } },
   }));
@@ -124,13 +138,13 @@ test("kegagalan Telegram API setelah commit → canonical state tetap, HTTP 200 
   assert.equal(firestore.jumlahDokumen("case_sessions"), 1, "duplicate update tidak melakukan mutasi kedua");
 });
 
-test("rate limit per IP → 429", async () => {
+test("rate limit per IP â†’ 429", async () => {
   siapkan({ maxPermintaan: 2 });
   const body = { update_id: 5, message: { message_id: 5, text: "halo", chat: { id: -1001, type: "group" }, from: { id: 42 } } };
 
-  await handler(permintaanWebhook(body));
-  await handler(permintaanWebhook({ ...body, update_id: 6 }));
-  const ketiga = await handler(permintaanWebhook({ ...body, update_id: 7 }));
+  await handlerInternal(permintaanWebhook(body));
+  await handlerInternal(permintaanWebhook({ ...body, update_id: 6 }));
+  const ketiga = await handlerInternal(permintaanWebhook({ ...body, update_id: 7 }));
 
   assert.equal(ketiga.status, 429);
 });

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { KomandoTelegramLayanan } from "../src/application/services/komando-telegram.js";
 import { TelegramAdapter } from "../src/infrastructure/adapters/telegram/telegram.js";
 import { validasiWebhookSecret } from "../src/security/audit.js";
+import { dapatkanKomposisiAplikasi } from "../src/komposisi/komposisi-aplikasi.js";
 
 /**
  * THIN ENTRYPOINT — Production Wiring Patch.
@@ -10,13 +11,19 @@ import { validasiWebhookSecret } from "../src/security/audit.js";
  * Alur: validate request → resolve context → invoke application service → response.
  */
 
+/** Ambil header nilai tunggal (handle array atau undefined). */
+function ambilHeaderNilaiTunggal(header: string | string[] | undefined): string | undefined {
+  if (Array.isArray(header)) return header[0];
+  return header;
+}
+
 interface PermintaanHttpTelegram {
   method?: string;
   headers?: Record<string, string | string[] | undefined>;
   body?: string | Record<string, unknown> | null;
 }
 
-async function handlerInternal(
+export async function handlerInternal(
   request: PermintaanHttpTelegram = {},
 ): Promise<{ status: number; body: string; headers?: Record<string, string> }> {
   const method = request.method?.toUpperCase() ?? "POST";
