@@ -92,14 +92,18 @@ export async function handlerInternal(
   }
 
   const update = komposisi.pengirimTelegram.parseUpdate(payload);
-  const punyaKonten = payload !== null && typeof payload === "object" && ("message" in (payload as Record<string, unknown>) || "callback_query" in (payload as Record<string, unknown>));
+const punyaKonten = payload !== null && typeof payload === "object" &&
+  ("message" in (payload as Record<string, unknown>) || "callback_query" in (payload as Record<string, unknown>));
 
-  if (!update || !update.updateId || !punyaKonten) {
-    return {
-      status: 400,
-      body: JSON.stringify({ ok: false, error: "unsupported telegram update" }),
-    };
-  }
+if (!update || !update.updateId) {
+  return { status: 400, body: JSON.stringify({ ok: false, error: "invalid update_id" }) };
+}
+
+if (!punyaKonten) {
+  // Update valid tapi tipe yang belum di-handle (my_chat_member, edited_message, dll)
+  // — balas 200 supaya Telegram tidak menahan antrian dengan retry.
+  return { status: 200, body: JSON.stringify({ ok: true, ignored: true }) };
+}
 
   const hasil = await komposisi.layananKomando.prosesUpdate(update);
 
