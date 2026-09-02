@@ -18,7 +18,7 @@ function ambilHeaderNilaiTunggal(header: string | string[] | undefined): string 
 }
 
 interface PermintaanHttpTelegram {
-  method?: string;
+  method?: string | undefined;
   headers?: Record<string, string | string[] | undefined>;
   body?: string | Record<string, unknown> | null;
 }

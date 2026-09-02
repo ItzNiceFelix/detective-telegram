@@ -83,7 +83,7 @@ test("IDEMPOTENCY: vote duplikat tidak menambah suara", async () => {
   assert.equal(sesi.accusationProposal?.votes.length, 1);
 });
 
-test("IDEMPOTENCY: final accusation duplikat → DEFECT: ditolak (harusnya safe replay)", async () => {
+test("IDEMPOTENCY: final accusation duplikat → safe replay, tanpa mutasi/event/reward kedua", async () => {
   const konteks = await beriSesiE2E([DETEKTIF_2 as never]);
   await ajukanTuduhan(konteks, "S01", DETEKTIF_1);
   await voteTuduhan(konteks, DETEKTIF_1);
@@ -92,10 +92,14 @@ test("IDEMPOTENCY: final accusation duplikat → DEFECT: ditolak (harusnya safe 
   const pertama = await finalisasiTuduhan(konteks, DETEKTIF_1);
   assert.equal(pertama.status, "berhasil");
 
-  // DEFECT (dokumentasi audit): duplicate finalize pada sesi CLEARED ditolak
-  // oleh validasiSesiTerbuka alih-alih safe-replay hasil existing.
+  // Safe-replay (PERSIST-07 / Requisite Defect #1): duplicate finalize pada sesi CLEARED
+  // mengembalikan hasil existing (sudahFinalSebelumnya) tanpa mutasi/event/reward kedua.
   const ulang = await finalisasiTuduhan(konteks, DETEKTIF_1);
-  assert.equal(ulang.status, "gagal");
+  assert.equal(ulang.status, "berhasil");
+  if (ulang.status === "berhasil") {
+    assert.equal(ulang.data.suspectId, "S01");
+    assert.equal(ulang.data.correctCulprit, true);
+  }
 
   // Yang penting: tidak ada mutasi/reward/event kedua.
   assert.equal((await eventAksi(konteks, JenisKejadianDomain.FINAL_ACCUSATION)).length, 1);

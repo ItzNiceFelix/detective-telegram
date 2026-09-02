@@ -3,7 +3,7 @@ import { validasiAdminToken } from "../src/security/audit.js";
 import { PenghitungBatasKejadian } from "../src/security/rate-limiter.js";
 
 interface PermintaanHttpAdmin {
-  method?: string;
+  method?: string | undefined;
   headers?: Record<string, string | string[] | undefined>;
   body?: string | Record<string, unknown> | null;
 }

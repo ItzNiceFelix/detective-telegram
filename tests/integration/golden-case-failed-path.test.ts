@@ -64,9 +64,13 @@ test("FAILED PATH: wrong final accusation → CLEARED+FAILED, tidak ada retry/ac
   const proposalKedua = await ajukanTuduhan(konteks, "S01");
   assert.equal(proposalKedua.status, "gagal");
 
-  // Tidak boleh retry / duplicate resolution: finalize kedua di sesi CLEARED → ditolak.
+  // Tidak boleh duplicate resolution/reward: finalize kedua di sesi CLEARED adalah safe-replay
+  // (sudahFinalSebelumnya) — mengembalikan hasil existing tanpa event/reward kedua (PERSIST-07).
   const finalKedua = await finalisasiTuduhan(konteks);
-  assert.equal(finalKedua.status, "gagal");
+  assert.equal(finalKedua.status, "berhasil");
+  if (finalKedua.status === "berhasil") {
+    assert.equal(finalKedua.data.correctCulprit, false);
+  }
 
   // Tidak boleh reopen: transisi dari CLEARED ke OPEN/LOBBY illegal menurut state machine.
   assert.throws(() => validasiTransisiSesi(StatusSesi.CLEARED, StatusSesi.OPEN), KesalahanValidasi);

@@ -37,7 +37,7 @@ Sama SOLVED PATH sampai /propose, tapi suspect salah (S99_WRONG).
 - /finalize → correctCulprit:false → CLEARED+FAILED, solvedAt undefined
 - snapshot outcome=FAILED
 - /propose lagi → gagal (CLEARED)
-- /finalize lagi → gagal (duplicate ditolak)
+- /finalize lagi → safe-replay hasil existing (berhasil), tanpa event/reward kedua (sudahFinalSebelumnya)
 - validasiTransisiSesi(CLEARED,OPEN) → throw KesalahanValidasi
 - event: 1 FINAL_ACCUSATION, 1 CASE_CLEARED
 - reward: 0 CORRECT_FINAL_RESOLUTION
@@ -82,7 +82,7 @@ Gameplay aksi memakai action-level idempotency di domain service. Update-level i
 | interrogate | 2x same | nodeBaruDiunlock:false, 1 event |
 | confront | 2x same | kontradiksiBaruDitemukan:false, 1 event |
 | vote | 2x same | votes tetap 1 |
-| finalize | 2x same | gagal (bukan safe-replay) — DEFECT (lihat §10) |
+| finalize | 2x same | safe-replay berhasil (sudahFinalSebelumnya), 1 event, 1 reward |
 
 Test: golden-case-idempotency.test.ts ✅
 
@@ -150,7 +150,7 @@ AI deterministic (RendererNaratifDeterministik). AI tidak memengaruhi: culprit, 
 
 ## 11. REQUISITES DEFECTS
 
-1. /finalize duplicate → gagal (bukan safe-replay). Canonical state aman (no double reward/resolution), tapi UX retry Telegram suboptimal. Dilaporkan.
+1. **/finalize duplicate → safe-replay berhasil (sudahFinalSebelumnya), tanpa double reward/resolution.** ✅ DIPERBAIKI: `finalisasiTuduhan()` memprioritaskan cek `finalAccusation` di atas `validasiSesiTerbuka` (retry Telegram aman). Test `golden-case-idempotency` & `golden-case-failed-path` diperbarui ke semantik safe-replay; unit test `tuduhan` sudah memvalidasi `sudahFinalSebelumnya` + sesi tidak berubah.
 2. @vercel/node types tidak terpasang di dev env (pre-existing).
 3. getChatMember cache TTL 5m/30s.
 4. Idempotency key retention belum ada TTL Firestore.

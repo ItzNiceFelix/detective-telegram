@@ -13,6 +13,14 @@ import { RepositoriIdempotenFirestore } from "../infrastructure/repositories/fir
 import { RepositoriPenggunaFirestore } from "../infrastructure/repositories/firestore/repositori-pengguna.js";
 import { RepositoriSesiFirestore } from "../infrastructure/repositories/firestore/repositori-sesi.js";
 import { RepositoriVersiKasusFirestore } from "../infrastructure/repositories/firestore/repositori-versi-kasus.js";
+import { RepositoriKontribusiFirestore } from "../infrastructure/repositories/firestore/repositori-kontribusi.js";
+import { RepositoriSnapshotResolusiFirestore } from "../infrastructure/repositories/firestore/repositori-snapshot-resolusi.js";
+import { LayananInvestigasiKasus, buatLayananInvestigasiKasus } from "../application/services/investigasi-kasus.js";
+import { LayananInterogasiKasus, buatLayananInterogasiKasus } from "../application/services/interogasi-kasus.js";
+import { LayananResolusiKasus, buatLayananResolusiKasus } from "../application/services/resolusi-kasus.js";
+import { RendererNaratifDeterministik } from "../domain/services/renderer-naratif.js";
+import { RepositoriCaseBibleStatis, type KontrakRepositoriCaseBible } from "../kasus/case-bible-repository.js";
+import { goldenCaseBible } from "../kasus/fixtures/golden-case.js";
 import { buatLoggerStruktur, LoggerStruktur } from "../observability/logger.js";
 import { PenghitungBatasKejadian } from "../security/rate-limiter.js";
 
@@ -33,6 +41,8 @@ export interface OpsiKomposisiAplikasi {
   firestore?: Firestore;
   /** Opsi pengirim Telegram (botToken/fetchImpl/timeout) untuk test. */
   pengirimTelegram?: OpsiPengirimTelegram;
+  /** Injeksi Case Bible repository (test dapat memakai fixture khusus). */
+  repositoriCaseBible?: KontrakRepositoriCaseBible;
   waktu?: PenyediaWaktu;
   logger?: LoggerStruktur;
   batasRate?: { maxPermintaan: number; jendelaMs: number };
@@ -45,6 +55,9 @@ export interface KomposisiAplikasi {
   readonly repositoriGrup: RepositoriGrupFirestore;
   readonly repositoriPengguna: RepositoriPenggunaFirestore;
   readonly repositoriIdempoten: RepositoriIdempotenFirestore;
+  readonly repositoriCaseBible: KontrakRepositoriCaseBible;
+  readonly repositoriKontribusi: RepositoriKontribusiFirestore;
+  readonly repositoriSnapshotResolusi: RepositoriSnapshotResolusiFirestore;
   readonly penerbitEventDomain: PenerbitAcaraDomainFirestore;
   readonly pengirimTelegram: TelegramAdapter;
   readonly validatorGrupTelegram: ValidatorGrupTelegram;
@@ -53,6 +66,9 @@ export interface KomposisiAplikasi {
   readonly penghitungBatasKejadian: PenghitungBatasKejadian;
   readonly waktu: PenyediaWaktu;
   readonly logger: LoggerKomandoTelegram;
+  readonly layananInvestigasi: LayananInvestigasiKasus;
+  readonly layananInterogasi: LayananInterogasiKasus;
+  readonly layananResolusi: LayananResolusiKasus;
   readonly layananKomando: KomandoTelegramLayanan;
 }
 
@@ -69,9 +85,19 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const repositoriGrup = new RepositoriGrupFirestore(firestore);
   const repositoriPengguna = new RepositoriPenggunaFirestore(firestore);
   const repositoriIdempoten = new RepositoriIdempotenFirestore(firestore);
+  const repositoriKontribusi = new RepositoriKontribusiFirestore(firestore);
+  const repositoriSnapshotResolusi = new RepositoriSnapshotResolusiFirestore(firestore);
 
   // Event persistence (case_sessions/{sessionId}/events/{eventId}).
   const penerbitEventDomain = new PenerbitAcaraDomainFirestore(firestore, logger);
+
+  // Case Bible. Default produksi: Golden Case fixture yang di-remap agar ref
+  // cocok dengan konvensi `case-bible:{caseId}:golden` yang dipakai domain
+  // services (caseId "CASE-001" → ref "case-bible:CASE-001:golden").
+  const repositoriCaseBible = opsi.repositoriCaseBible ?? new RepositoriCaseBibleStatis([
+    { ...goldenCaseBible, caseBibleRef: `case-bible:${String(goldenCaseBible.caseId)}:golden` },
+  ]);
+  const rendererNaratif = new RendererNaratifDeterministik();
 
   // Telegram sender/adapter (sendMessage + getChatMember).
   const pengirimTelegram = new TelegramAdapter(opsi.pengirimTelegram ?? {});
@@ -87,6 +113,30 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   };
   const penghitungBatasKejadian = new PenghitungBatasKejadian(batasRate);
 
+  const layananInvestigasi = buatLayananInvestigasiKasus({
+    repositoriSesi: repositoriSesiKasus,
+    repositoriCaseBible,
+    penerbitEventDomain,
+    waktu,
+  });
+
+  const layananInterogasi = buatLayananInterogasiKasus({
+    repositoriSesi: repositoriSesiKasus,
+    repositoriCaseBible,
+    penerbitEventDomain,
+    waktu,
+    renderer: rendererNaratif,
+  });
+
+  const layananResolusi = buatLayananResolusiKasus({
+    repositoriSesi: repositoriSesiKasus,
+    repositoriCaseBible,
+    repositoriKontribusi,
+    repositoriSnapshot: repositoriSnapshotResolusi,
+    penerbitEventDomain,
+    waktu,
+  });
+
   const konfigurasiLayanan: KonfigurasiKomandoTelegram = {
     repositoriVersiKasus: {
       ambilVersiKasusTerbitan: () => repositoriVersiKasus.ambilVersiKasusTerbitan(),
@@ -100,6 +150,11 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     validasiAksesTelegram: (userId, chatId) => validatorAksesTelegram.validasi(userId, chatId),
     validasiGroupTelegram: (chatId) => validatorGrupTelegram.validasi(chatId),
     validasiAdminGrup: (userId, chatId) => validatorAdminGrupTelegram.validasi(userId, chatId),
+    repositoriCaseBible,
+    layananInvestigasi,
+    layananInterogasi,
+    layananResolusi,
+    rendererNaratif,
     logger,
   };
 
@@ -112,6 +167,9 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     repositoriGrup,
     repositoriPengguna,
     repositoriIdempoten,
+    repositoriCaseBible,
+    repositoriKontribusi,
+    repositoriSnapshotResolusi,
     penerbitEventDomain,
     pengirimTelegram,
     validatorGrupTelegram,
@@ -120,6 +178,9 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     penghitungBatasKejadian,
     waktu,
     logger,
+    layananInvestigasi,
+    layananInterogasi,
+    layananResolusi,
     layananKomando,
   };
 }

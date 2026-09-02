@@ -95,12 +95,15 @@ export function finalisasiTuduhan(
   caseBible: CaseBible,
   waktuSekarang: WaktuIso,
 ): { sesi: SesiKasus; tuduhanAkhir: TuduhanAkhir; sudahFinalSebelumnya: boolean } {
-  validasiSesiTerbuka(sesi);
-
+  // Idempotensi didahulukan di atas validasi status sesi: duplicate delivery dari
+  // Telegram (update yang sama di-retry) maupun finalize ulang setelah CLEARED
+  // harus menjadi safe-replay, bukan error — lihat PERSIST-07 / §17.9.
   const existingFinal = (sesi as any).finalAccusation as TuduhanAkhir | null | undefined;
   if (existingFinal) {
     return { sesi, tuduhanAkhir: existingFinal, sudahFinalSebelumnya: true };
   }
+
+  validasiSesiTerbuka(sesi);
 
   const proposal = (sesi as any).accusationProposal as ProposalTuduhan | null | undefined;
   if (!proposal || proposal.status !== "QUALIFIED") {

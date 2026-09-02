@@ -8,6 +8,13 @@ import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
 import { buatIdEvent, buatIdGrup, buatIdSesiKasus, type IdEvent, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
 import type { VersiKasus } from "../../kasus/versi-kasus.js";
 import type { PermintaanTelegram } from "../../infrastructure/adapters/telegram/telegram.js";
+import type { KontrakRepositoriCaseBible } from "../../kasus/case-bible-repository.js";
+import type { CaseBible, MaksudInterogasi, PeristiwaLinimasa } from "../../kasus/case-bible.js";
+import type { LayananInvestigasiKasus } from "../../application/services/investigasi-kasus.js";
+import type { LayananInterogasiKasus } from "../../application/services/interogasi-kasus.js";
+import type { LayananResolusiKasus } from "../../application/services/resolusi-kasus.js";
+import type { PintuRendererNaratif } from "../../domain/services/renderer-naratif.js";
+import { renderDaftarObjek, renderHasilPeriksaObjek } from "./render-investigasi.js";
 
 export interface RepositoriVersiKasusTelegram {
   ambilVersiKasus?: (caseId?: IdKasus, versionId?: IdVersiKasus) => Promise<VersiKasus | null>;
@@ -53,6 +60,13 @@ export interface KonfigurasiKomandoTelegram {
   validasiGroupTelegram: (chatId: string) => Promise<boolean>;
   /** /startcase: admin grup. Default fallback: validasiAksesTelegram. */
   validasiAdminGrup?: (userId: string, chatId: string) => Promise<boolean>;
+  /** Sumber Case Bible untuk rendering (suspects/timeline) & lookup gameplay. */
+  repositoriCaseBible?: KontrakRepositoriCaseBible;
+  /** Layanan gameplay — dipakai oleh command /investigate, /inspect, dll. */
+  layananInvestigasi?: LayananInvestigasiKasus;
+  layananInterogasi?: LayananInterogasiKasus;
+  layananResolusi?: LayananResolusiKasus;
+  rendererNaratif?: PintuRendererNaratif;
   logger?: LoggerKomandoTelegram;
 }
 
@@ -140,6 +154,46 @@ export class KomandoTelegramLayanan {
       // /case — tampilkan info kasus aktif (caseId & version) bila ada.
       if (command === "/case") {
         return this.tampilkanInfoKasus(groupId, chatId, permintaan.updateId);
+      }
+
+      // ====== GAMEPLAY COMMANDS (Milestone wiring) ======
+      // Seluruh command gameplay membutuhkan sesi aktif (bukan LOBBY terminal).
+      // Argumen dipakai persis sesuai kontrak domain; rendering hanya lapisan tipis.
+      const teksArgs = typeof permintaan.text === "string" ? permintaan.text.trim() : "";
+      const argumen = teksArgs.split(/\s+/).slice(1).filter((bagian) => bagian.length > 0);
+
+      if (command === "/investigate") {
+        return this.lakukanInvestigasi(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/inspect") {
+        return this.lakukanPeriksa(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/suspects") {
+        return this.tampilkanTersangka(groupId, chatId, permintaan.updateId);
+      }
+      if (command === "/interrogate") {
+        return this.lakukanInterogasi(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/confront") {
+        return this.lakukanKonfrontasi(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/timeline") {
+        return this.tampilkanLinimasa(groupId, userId, chatId, permintaan.updateId);
+      }
+      if (command === "/contradictions") {
+        return this.tampilkanKontradiksi(groupId, chatId, permintaan.updateId);
+      }
+      if (command === "/theory") {
+        return this.perbaruiTeori(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/accuse") {
+        return this.ajukanAkusasi(groupId, userId, argumen, chatId, permintaan.updateId);
+      }
+      if (command === "/vote") {
+        return this.suaraAkusasi(groupId, userId, chatId, permintaan.updateId);
+      }
+      if (command === "/finalize") {
+        return this.finalisasiAkusasi(groupId, userId, chatId, permintaan.updateId);
       }
 
       return gagal(new KesalahanValidasi("Perintah tidak didukung."));
@@ -400,6 +454,301 @@ export class KomandoTelegramLayanan {
     const msg = `Kasus aktif: ${sesi.caseId} (versi ${sesi.caseVersionId}).`;
     await this.kirimPesanAman(chatId, msg, { command: "/case", updateId, sessionId: String(sesi.sessionId) });
     return berhasil({ command: "/case", message: msg, session: sesi });
+  }
+
+  // ====== GAMEPLAY COMMAND HANDLERS ======
+  // Lapisan tipis: parse/validasi argumen, resolve sesi aktif, panggil layanan,
+  // render hasil. Seluruh gameplay rule tetap di domain/application service.
+
+  private async sesiGameplayAktif(groupId: IdGrup): Promise<{ sesi: SesiKasus; error?: undefined } | { sesi?: undefined; error: Error }> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      return { error: new KesalahanValidasi("Tidak ada sesi aktif untuk grup ini.") };
+    }
+    if (sesi.status !== StatusSesi.OPEN) {
+      return { error: new KesalahanValidasi("Aksi gameplay hanya valid ketika sesi berstatus OPEN.") };
+    }
+    return { sesi };
+  }
+
+  private ambilLayanan<T>(layanan: T | undefined, nama: string): T {
+    if (!layanan) {
+      throw new KesalahanValidasi(`Layanan ${nama} belum ter-wiring di composition root.`);
+    }
+    return layanan;
+  }
+
+  private async ambilCaseBibleUntukSesi(sesi: SesiKasus): Promise<CaseBible> {
+    const repositori = this.ambilLayanan(this.konfigurasi.repositoriCaseBible, "repositoriCaseBible");
+    const ref = `case-bible:${String(sesi.caseId)}:golden`;
+    const caseBible = await repositori.ambilCaseBible(ref);
+    if (!caseBible) {
+      throw new KesalahanValidasi("Case Bible tidak ditemukan untuk sesi ini.");
+    }
+    return caseBible;
+  }
+
+  private async kirimHasilGameplay<T>(
+    command: string,
+    chatId: string,
+    updateId: string,
+    sesi: SesiKasus,
+    hasil: HasilOperasi<T, Error>,
+    render: (data: T) => string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const korelasi = { command, updateId, sessionId: String(sesi.sessionId) };
+    if (hasil.status === "berhasil") {
+      const pesan = render(hasil.data);
+      await this.kirimPesanAman(chatId, pesan, korelasi);
+      return berhasil({ command, message: pesan, session: sesi });
+    }
+    const pesanGagal = hasil.error instanceof Error ? hasil.error.message : "Terjadi kesalahan.";
+    await this.kirimPesanAman(chatId, pesanGagal, korelasi);
+    return gagal(hasil.error);
+  }
+
+  private async tampilkanBantuanArgumen(pola: string, chatId: string, updateId: string): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const pesan = `Argumen tidak lengkap.\n\nContoh: ${pola}`;
+    await this.kirimPesanAman(chatId, pesan, { command: "gameplay", updateId });
+    return berhasil({ command: "gameplay", message: pesan });
+  }
+
+  private async lakukanInvestigasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const sceneId = argumen[0];
+    if (!sceneId) return this.tampilkanBantuanArgumen("/investigate <sceneId>", chatId, updateId);
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananInvestigasi, "layananInvestigasi");
+    const hasil = await layanan.prosesInvestigasiAdegan({ sessionId: konteks.sesi.sessionId, userId, sceneId });
+    return this.kirimHasilGameplay("/investigate", chatId, updateId, konteks.sesi, hasil, (data) => {
+      if (data.objekTampak.length === 0) {
+        return `🔎 Adegan ${sceneId}\n\nTidak ada objek yang terlihat saat ini.`;
+      }
+      const daftar = data.objekTampak.map((objek) => `• ${objek.objectId} — ${objek.name}`).join("\n");
+      return `🔎 Adegan ${sceneId}\n\n${daftar}\n\nGunakan /inspect <objectId> untuk memeriksa.`;
+    });
+  }
+
+  private async lakukanPeriksa(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const objectId = argumen[0];
+    if (!objectId) return this.tampilkanBantuanArgumen("/inspect <objectId>", chatId, updateId);
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananInvestigasi, "layananInvestigasi");
+    const hasil = await layanan.prosesPeriksaObjek({ sessionId: konteks.sesi.sessionId, userId, objectId });
+    return this.kirimHasilGameplay("/inspect", chatId, updateId, konteks.sesi, hasil, (data) => {
+      const bukti = data.evidenceBaruDitemukan && data.evidenceId ? `\n\n✅ Evidence ditemukan: ${data.evidenceId}` : "";
+      const sudah = data.sudahDiperiksaSebelumnya ? "\n\n(Sudah diperiksa sebelumnya.)" : "";
+      return `${data.observasi.text}${bukti}${sudah}`;
+    });
+  }
+
+  private async tampilkanTersangka(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    let caseBible: CaseBible;
+    try {
+      caseBible = await this.ambilCaseBibleUntukSesi(konteks.sesi);
+    } catch (error) {
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("Case Bible tidak tersedia."));
+    }
+
+    const daftar = caseBible.suspects.map((s) => `• ${s.suspectId} — ${s.name} (${s.occupation})`).join("\n");
+    const pesan = `🕵️ Tersangka\n\n${daftar}\n\nGunakan /interrogate <suspectId> <maksud> untuk menginterogasi.`;
+    await this.kirimPesanAman(chatId, pesan, { command: "/suspects", updateId, sessionId: String(konteks.sesi.sessionId) });
+    return berhasil({ command: "/suspects", message: pesan, session: konteks.sesi });
+  }
+
+  private async lakukanInterogasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const suspectId = argumen[0];
+    const maksudValue = argumen[1];
+    if (!suspectId || !maksudValue) {
+      return this.tampilkanBantuanArgumen("/interrogate <suspectId> <ASK_ALIBI|ASK_VICTIM|ASK_MOTIVE|ASK_TIMELINE|ASK_RELATIONSHIP|ASK_EVIDENCE>", chatId, updateId);
+    }
+
+    const MAKSUD_VALID: readonly MaksudInterogasi[] = ["ASK_ALIBI", "ASK_VICTIM", "ASK_MOTIVE", "ASK_TIMELINE", "ASK_RELATIONSHIP", "ASK_EVIDENCE"];
+    const maksud = MAKSUD_VALID.find((m) => m === maksudValue.toUpperCase());
+    if (!maksud) {
+      return gagal(new KesalahanValidasi(`Maksud interogasi tidak dikenali: ${maksudValue}.`));
+    }
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananInterogasi, "layananInterogasi");
+    const hasil = await layanan.prosesInterogasi({ sessionId: konteks.sesi.sessionId, userId, suspectId, maksud });
+    return this.kirimHasilGameplay("/interrogate", chatId, updateId, konteks.sesi, hasil, (data) => {
+      const statusUnlock = data.statementBaruDiunlock
+        ? "\n\n📌 Statement baru ter-unlock."
+        : data.nodeBaruDiunlock
+          ? "\n\n💬 Dialog baru ter-unlock."
+          : data.sudahDiunlockSebelumnya
+            ? "\n\n(Sudah dibuka sebelumnya.)"
+            : "";
+      return `${data.responseText}${statusUnlock}`;
+    });
+  }
+
+  private async lakukanKonfrontasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const suspectId = argumen[0];
+    const evidenceId = argumen[1];
+    if (!suspectId || !evidenceId) {
+      return this.tampilkanBantuanArgumen("/confront <suspectId> <evidenceId>", chatId, updateId);
+    }
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananInterogasi, "layananInterogasi");
+    const hasil = await layanan.prosesKonfrontasi({ sessionId: konteks.sesi.sessionId, userId, suspectId, evidenceId });
+    return this.kirimHasilGameplay("/confront", chatId, updateId, konteks.sesi, hasil, (data) => {
+      const bagianBaru = data.kontradiksiBaruDitemukan ? `\n\n🔥 Kontradiksi ditemukan: ${data.contradictionId}` : "";
+      const timeline = data.timelineBaruDiketahui ? "\n\n🗓️ Informasi timeline baru terungkap." : "";
+      const sudah = data.sudahDikonfrontasiSebelumnya ? "\n\n(Sudah dikonfrontasi sebelumnya.)" : "";
+      return `${suspectId} dikonfrontasi dengan ${evidenceId}.${bagianBaru}${timeline}${sudah}`;
+    });
+  }
+
+  private async tampilkanLinimasa(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const layanan = this.ambilLayanan(this.konfigurasi.layananInterogasi, "layananInterogasi");
+    const hasil = await layanan.prosesAmbilLinimasa({ sessionId: konteks.sesi.sessionId, userId });
+    return this.kirimHasilGameplay("/timeline", chatId, updateId, konteks.sesi, hasil, (data: PeristiwaLinimasa[]) => {
+      if (data.length === 0) {
+        return "🗓️ Timeline\n\nBelum ada peristiwa linimasa yang diketahui.";
+      }
+      const daftar = data.map((p) => `• ${p.eventId} — ${p.action} (${p.truthStatus})`).join("\n");
+      return `🗓️ Timeline\n\n${daftar}`;
+    });
+  }
+
+  private async tampilkanKontradiksi(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const daftar = konteks.sesi.discoveredContradictionIds;
+    const pesan = daftar.length === 0
+      ? "🔥 Kontradiksi\n\nBelum ada kontradiksi yang ditemukan."
+      : `🔥 Kontradiksi\n\n${daftar.map((id) => `• ${id}`).join("\n")}`;
+    await this.kirimPesanAman(chatId, pesan, { command: "/contradictions", updateId, sessionId: String(konteks.sesi.sessionId) });
+    return berhasil({ command: "/contradictions", message: pesan, session: konteks.sesi });
+  }
+
+  private async perbaruiTeori(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const suspectId = argumen[0];
+    if (!suspectId) return this.tampilkanBantuanArgumen("/theory <suspectId>", chatId, updateId);
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
+    const hasil = await layanan.prosesPerbaruiTeori({ sessionId: konteks.sesi.sessionId, userId, culpritSuspectId: suspectId });
+    return this.kirimHasilGameplay("/theory", chatId, updateId, konteks.sesi, hasil, (data) => {
+      return `🧠 Teori tim\n\nPelaku hipotesis: ${suspectId}\nDukungan: ${data.support}`;
+    });
+  }
+
+  private async ajukanAkusasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    argumen: string[],
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const suspectId = argumen[0];
+    if (!suspectId) return this.tampilkanBantuanArgumen("/accuse <suspectId>", chatId, updateId);
+
+    const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
+    const hasil = await layanan.prosesAjukanTuduhan({ sessionId: konteks.sesi.sessionId, userId, suspectId });
+    return this.kirimHasilGameplay("/accuse", chatId, updateId, konteks.sesi, hasil, (data) => {
+      return `⚖️ Proposal accusation diajukan untuk ${suspectId}. Status: ${data.status}. Gunakan /vote untuk memberikan suara.`;
+    });
+  }
+
+  private async suaraAkusasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
+    const hasil = await layanan.prosesVoteTuduhan({ sessionId: konteks.sesi.sessionId, userId });
+    return this.kirimHasilGameplay("/vote", chatId, updateId, konteks.sesi, hasil, (data) => {
+      const qualified = data.status === "QUALIFIED";
+      const suara = data.votes.length;
+      return `🗳️ Suara tercatat (${suara} pemain).${qualified ? "\n\nProposal qualified — siap difinalisasi dengan /finalize." : ""}`;
+    });
+  }
+
+  private async finalisasiAkusasi(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const konteks = await this.sesiGameplayAktif(groupId);
+    if (!konteks.sesi) return gagal(konteks.error);
+    const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
+    const hasil = await layanan.prosesFinalisasiTuduhan({ sessionId: konteks.sesi.sessionId, userId });
+
+    const korelasi = { command: "/finalize", updateId, sessionId: String(konteks.sesi.sessionId) };
+    if (hasil.status === "berhasil") {
+      const data = hasil.data;
+      const outcome = data.correctCulprit ? "SOLVED ✅" : "FAILED ❌";
+      const pesan = `🔔 Final accusation: ${data.suspectId}\nKepastian: ${data.correctCulprit ? "Benar" : "Salah"}\nHasil kasus: ${outcome}`;
+      await this.kirimPesanAman(chatId, pesan, korelasi);
+      return berhasil({ command: "/finalize", message: pesan, session: konteks.sesi });
+    }
+
+    const pesanGagal = hasil.error instanceof Error ? hasil.error.message : "Terjadi kesalahan saat finalisasi.";
+    await this.kirimPesanAman(chatId, pesanGagal, korelasi);
+    return gagal(hasil.error);
   }
 
   private async ambilSesiAktifGrup(groupId: IdGrup, transaction?: Transaction): Promise<SesiKasus | null> {
