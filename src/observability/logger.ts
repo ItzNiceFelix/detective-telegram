@@ -32,23 +32,22 @@ export class LoggerStruktur {
   }
 
   private catat(level: TingkatLog, message: string, context?: Record<string, unknown>): void {
-    if (!this.bolehCatat(level)) {
-      return;
-    }
+  if (!this.bolehCatat(level)) {
+    return;
+  }
 
-    const entry: LogEntry = {
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      ...(context ? { context } : {}),
-    };
+  const entry: LogEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...(context ? { context } : {}),
+  };
 
-    // Logger minimal untuk lokal / deployment. Ini mencegah API call tanpa kebutuhan domain.
-    if (process.env.NODE_ENV !== "production") {
-      console.log(JSON.stringify(entry));
+  // Selalu cetak — Vercel function logs menangkap console.log/error di semua environment.
+  // Syarat NODE_ENV sebelumnya membungkam warn/error di production (bug).
+  console.log(JSON.stringify(entry));
     }
   }
-}
 
 export function buatLoggerStruktur(level: TingkatLog = "info"): LoggerStruktur {
   return new LoggerStruktur(level);
