@@ -40,7 +40,7 @@ test("renderHasilPeriksaObjek menampilkan pesan duplicate tanpa reward baru", ()
   };
 
   const pesan = renderHasilPeriksaObjek(hasil, "Broken Watch");
-  assert.match(pesan.text, /sudah diperiksa sebelumnya/);
+  assert.match(pesan.text, /sudah diperiksa sebelumnya/i);
 });
 
 test("renderDaftarBukti menampilkan pesan kosong jika belum ada evidence", () => {

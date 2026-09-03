@@ -74,7 +74,8 @@ export async function beriSesiE2E(detektifTambahan: IdPemain[] = []): Promise<Ko
   assert.ok(sessionId);
 
   // Tambah detective tambahan via domain helper `tambahDetektifKeSesi`
-  // (production /join belum di-wire — gap audit; helper adalah mekanisme join yang ada).
+  // (mekanisme yang sama dengan production /join; helper dipakai di sini untuk
+  // membangun fixture cepat tanpa harus melewatkan seluruh pipeline /join).
   if (detektifTambahan.length > 0) {
     const sesi = (await komposisi.repositoriSesiKasus.ambil(sessionId))!;
     let denganDetektif = sesi;

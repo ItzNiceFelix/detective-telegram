@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { StatusSesi, HasilSesi } from "../../src/domain/enums.js";
-import { KesalahanValidasi } from "../../src/fondasi/eror.js";
+import { KesalahanAutorisasi, KesalahanValidasi } from "../../src/fondasi/eror.js";
 import { buatIdPemain, buatWaktuIso } from "../../src/fondasi/primitif.js";
 import { ajukanTuduhan, berikanSuaraTuduhan, finalisasiTuduhan, hitungKuorum } from "../../src/domain/services/tuduhan.js";
 import { goldenCaseBible } from "../../src/kasus/fixtures/golden-case.js";
@@ -40,7 +40,10 @@ test("hitungKuorum sesuai tabel: 1->1, 2->2, 3->2, 4->3, 5->3, 6->4", () => {
 });
 
 test("ajukanTuduhan menolak dari spectator", () => {
-  assert.throws(() => ajukanTuduhan(sesiDasar(), "spectator-1", "S01", buatWaktuIso("2026-01-01T01:00:00.000Z")), KesalahanValidasi);
+  // Spectator bukan detective aktif → ditolak sebagai pelanggaran otorisasi
+  // (KesalahanAutorisasi), konsisten dengan golden-case contract dan seluruh
+  // aksi mutasi lain (investigate/interrogate/confront/theory).
+  assert.throws(() => ajukanTuduhan(sesiDasar(), "spectator-1", "S01", buatWaktuIso("2026-01-01T01:00:00.000Z")), KesalahanAutorisasi);
 });
 
 test("vote duplicate tidak menambah suara kedua", () => {

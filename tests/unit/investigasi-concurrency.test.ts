@@ -19,6 +19,10 @@ function buatLayananConcurrency(sesiAwal: SesiKasus) {
   const store: Record<string, SesiKasus> = { [String(sesiAwal.sessionId)]: sesiAwal };
   const events: any[] = [];
 
+  // Serialisasi manual `transaksi`: panggilan berikutnya menunggu commit panggilan
+  // sebelumnya sehingga membaca snapshot state terkini (lihat komentar fungsi).
+  let antreanTransaksi: Promise<unknown> = Promise.resolve();
+
   const layanan = new LayananInvestigasiKasus({
     repositoriSesi: {
       ambil: async (id) => store[String(id)] ?? null,
@@ -26,7 +30,12 @@ function buatLayananConcurrency(sesiAwal: SesiKasus) {
         store[String(sesi.sessionId)] = sesi;
         return sesi;
       },
-      transaksi: async (runner) => runner({} as any),
+      transaksi: async (runner) => {
+        const jalankan = async () => runner({} as any);
+        const berikutnya = antreanTransaksi.then(jalankan, jalankan);
+        antreanTransaksi = berikutnya.then(() => undefined, () => undefined);
+        return berikutnya;
+      },
     },
     repositoriCaseBible: new RepositoriCaseBibleStatis([{ ...goldenCaseBible, caseBibleRef: "case-bible:CASE-001:golden" }]),
     penerbitEventDomain: { kirim: async (e) => { events.push(e); } },

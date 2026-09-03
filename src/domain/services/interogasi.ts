@@ -102,9 +102,17 @@ export function interogasiTersangka(
   }
 
   const responseText = renderer.renderRespon(node.semanticResponse);
-  const sudahDiunlockSebelumnya = sesi.unlockedDialogueIds.includes(node.nodeId);
+  const nodeSudahDiunlock = sesi.unlockedDialogueIds.includes(node.nodeId);
 
-  if (sudahDiunlockSebelumnya) {
+  const kandidatStatementBaru = node.unlocksStatementId;
+  const statementBaruDiunlock = Boolean(kandidatStatementBaru) && !sesi.unlockedStatementIds.includes(kandidatStatementBaru!);
+
+  // No-op hanya jika tidak ada outcome bermakna yang tersisa: node sudah
+  // unlocked DAN seluruh statement yang dibuka node itu juga sudah unlocked.
+  // Jika node sudah unlocked (mis. lewat jalur konfrontasi) tapi statement
+  // yang terkait belum, interogasi tetap membuka statement tsb — tanpa
+  // duplicate event/reward karena unlock statement di-trigger sekali.
+  if (nodeSudahDiunlock && !statementBaruDiunlock) {
     return {
       sesi,
       node,
@@ -115,9 +123,9 @@ export function interogasiTersangka(
     };
   }
 
-  const unlockedDialogueIdsBaru = [...sesi.unlockedDialogueIds, node.nodeId];
-  const kandidatStatementBaru = node.unlocksStatementId;
-  const statementBaruDiunlock = Boolean(kandidatStatementBaru) && !sesi.unlockedStatementIds.includes(kandidatStatementBaru!);
+  const unlockedDialogueIdsBaru = nodeSudahDiunlock
+    ? sesi.unlockedDialogueIds
+    : [...sesi.unlockedDialogueIds, node.nodeId];
   const unlockedStatementIdsBaru = statementBaruDiunlock && kandidatStatementBaru
     ? [...sesi.unlockedStatementIds, kandidatStatementBaru]
     : sesi.unlockedStatementIds;
@@ -133,8 +141,8 @@ export function interogasiTersangka(
     node,
     responseText,
     statementBaruDiunlock,
-    nodeBaruDiunlock: true,
-    sudahDiunlockSebelumnya: false,
+    nodeBaruDiunlock: !nodeSudahDiunlock,
+    sudahDiunlockSebelumnya: nodeSudahDiunlock,
   };
 }
 

@@ -121,7 +121,12 @@ test("CONCURRENCY: final accusation simultan → tepat satu resolution", async (
   ]);
 
   const sukses = [f1, f2].filter((h) => h.status === "berhasil");
-  assert.equal(sukses.length, 1, "hanya satu finalize yang commit");
+  // PERSIST-07 / §11 (safe-replay): finalize bersamaan boleh sama-sama mengembalikan
+  // "berhasil" — panggilan kedua membaca finalAccusation yang sudah ter-commit dan
+  // menjadi safe-replay TANPA event/reward/snapshot kedua. Invariant diukur pada
+  // tingkat RESOLUSI (tepat satu commit yang benar-benar terjadi), bukan jumlah
+  // request yang berstatus sukses.
+  assert.ok(sukses.length >= 1, "setidaknya satu finalize berhasil");
   assert.equal((await eventAksi(konteks, JenisKejadianDomain.FINAL_ACCUSATION)).length, 1, "satu event final");
   assert.equal((await eventAksi(konteks, JenisKejadianDomain.CASE_CLEARED)).length, 1);
 
@@ -130,4 +135,12 @@ test("CONCURRENCY: final accusation simultan → tepat satu resolution", async (
 
   const kontribusi = konteks.firestore.semuaDokumen(`case_sessions/${String(konteks.sessionId)}/contributions`);
   assert.equal(kontribusi.filter((k) => k.type === "CORRECT_FINAL_RESOLUTION").length, 1, "reward tidak duplikat");
+
+  // Canonical session hanya memiliki satu final resolution; finalize ulang adalah
+  // safe-replay tanpa menambah event/commit kedua.
+  const sesiPasca = await ambilSesi(konteks);
+  assert.ok(sesiPasca.finalAccusation, "canonical session memiliki satu finalAccusation");
+  const ulang = await finalisasiTuduhan(konteks, DETEKTIF_1);
+  assert.equal(ulang.status, "berhasil");
+  assert.equal((await eventAksi(konteks, JenisKejadianDomain.FINAL_ACCUSATION)).length, 1, "finalize ulang = safe-replay, tanpa event kedua");
 });

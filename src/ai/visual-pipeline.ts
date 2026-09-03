@@ -65,7 +65,14 @@ export class RepositoriAsetVisualMemori implements KontrakRepositoriAsetVisual {
   private readonly manifest = new Map<string, ManifestAsetVisual>();
 
   ambilKunci(plan: VisualPlan, caseId: string): string {
-    return `${caseId}:${plan.sceneId}:${plan.planId}:${plan.requiredClues.map((item) => item.id).join("|")}`;
+    // Kunci dedup berbasis identitas stabil (case + scene + plan), BUKAN daftar
+    // clue hasil parsing. Selama persist, RepositoriAsetVisualMemori.simpan
+    // merekonstruksi plan dari aset (yang requiredClues-nya hanya berisi clue
+    // yang dideklarasikan oleh provider), jadi bila kunci ikut serta
+    // mendasarkan pada requiredClues maka lookup ulang (yang memakai plan input
+    // penuh) tidak akan pernah cocok → terjadi regenerasi berulang. Menyimpan
+    // pada caseId:sceneId:planId menjamin satu aset per plan/scene di-reuse.
+    return `${caseId}:${plan.sceneId}:${plan.planId}`;
   }
 
   ambil(kunci: string): AsetVisual | null {

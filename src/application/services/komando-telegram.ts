@@ -1,8 +1,9 @@
 import type { Transaction } from "firebase-admin/firestore";
 import { StatusSesi, JenisKejadianDomain } from "../../domain/enums.js";
 import type { Grup, SesiKasus } from "../../domain/entities.js";
-import { validasiTransisiSesi, mulaiSesi } from "../../domain/services/transisi-sesi.js";
+import { validasiTransisiSesi, mulaiSesi, tambahDetektifKeSesi, BATAS_DETEKTIF_AKTIF } from "../../domain/services/transisi-sesi.js";
 import type { KejadianDomain, KontrakIdempoten } from "../../event/domain.js";
+import { validasiInputTelegram, amanUntukMutasiGame } from "../../security/audit.js";
 import { KesalahanAutorisasi, KesalahanIdempoten, KesalahanValidasi } from "../../fondasi/eror.js";
 import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
 import { buatIdEvent, buatIdGrup, buatIdSesiKasus, type IdEvent, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
@@ -79,6 +80,37 @@ export interface HasilPerintahTelegram {
 /** Satu sesi non-terminal per grup (docs/26.1): LOBBY/OPEN/PAUSED. */
 const STATUS_SESI_NON_TERMINAL: ReadonlyArray<StatusSesi> = [StatusSesi.LOBBY, StatusSesi.OPEN, StatusSesi.PAUSED];
 
+// ====== Batas input (BLOCKER 2) ======
+// /docs/BETA-READINESS §Input Validation — text max 500; argumen/ID dibatasi lebih
+// ketat dan daftar argumen di-bounded. Ditegakkan di SATU boundary prosesUpdate.
+/** Batas panjang teks mentah Telegram. */
+export const MAKS_PANJANG_TEKS_INPUT = 500;
+/** Batas panjang satu argumen/ID (sceneId, objectId, suspectId, evidenceRef, …). */
+export const MAKS_PANJANG_ARGUMEN = 128;
+/** Batas jumlah argumen per command (bounded argument list). */
+export const MAKS_JUMLAH_ARGUMEN = 20;
+
+/**
+ * Command yang melakukan MUTASI state kanonik (BLOCKER 3). Sebelum command
+ * ini diproses, `amanUntukMutasiGame` memvalidasi context user/group + akses
+ * grup secara fail-closed (melempar bila tidak valid). Command read-only
+ * (/start, /status, /case, /suspects, /timeline, /contradictions) TIDAK
+ * melewati guard ini.
+ */
+const KOMANDO_MUTASI_GAMEPLAY: ReadonlySet<string> = new Set([
+  "/newcase",
+  "/startcase",
+  "/join",
+  "/investigate",
+  "/inspect",
+  "/interrogate",
+  "/confront",
+  "/theory",
+  "/accuse",
+  "/vote",
+  "/finalize",
+]);
+
 export class KomandoTelegramLayanan {
   constructor(private readonly konfigurasi: KonfigurasiKomandoTelegram) {}
 
@@ -133,6 +165,28 @@ export class KomandoTelegramLayanan {
         return gagal(new KesalahanAutorisasi("Anda tidak memiliki akses untuk mengelola grup ini."));
       }
 
+      // SECURITY BOUNDARY (BLOCKER 2) — validasi input mentah untuk SEMUA command.
+      // Enforce configured length limits: command, arguments, free text.
+      // Invalid input berhenti SEBELUM dispatch ke handler apa pun.
+      const validasiInput = validasiInputTelegram(
+        typeof permintaan.text === "string" ? permintaan.text : undefined,
+        MAKS_PANJANG_TEKS_INPUT,
+      );
+      if (!validasiInput.valid) {
+        return gagal(new KesalahanValidasi(validasiInput.alasan ?? "input tidak valid"));
+      }
+
+      // SECURITY BOUNDARY (BLOCKER 3) — amanUntukMutasiGame hanya untuk command
+      // yang melakukan mutasi gameplay. Hasilnya WAJIB dicek; tidak pernah diabaikan.
+      if (KOMANDO_MUTASI_GAMEPLAY.has(command)) {
+        // SECURITY BOUNDARY (BLOCKER 3) — helper ini THROWS bila context
+        // user/group tidak valid atau akses grup belum tervalidasi. Hasilnya
+        // tidak pernah boleh diabaikan; setiap command mutasi gameplay wajib
+        // melewati gerbang ini SEBELUM dispatch ke handler. Otorisasi per-aksi
+        // (harus detective aktif) tetap ditegakkan di dalam tiap layanan domain.
+        amanUntukMutasiGame(userIdTelegram, chatId, aksesValid);
+      }
+
       if (command === "/start") {
         const pesan = "Bot aktif. Gunakan /newcase untuk membuat sesi baru, lalu /startcase untuk memulai.";
         await this.kirimPesanAman(chatId, pesan, { command, updateId: permintaan.updateId });
@@ -156,11 +210,32 @@ export class KomandoTelegramLayanan {
         return this.tampilkanInfoKasus(groupId, chatId, permintaan.updateId);
       }
 
+      // /join — peserta aktif menjadi detective (BLOCKER 1).
+      // Spectator tidak pernah otomatis menjadi detective: mutasi participant
+      // hanya terjadi lewat /join, dalam satu transaction Firestore.
+      if (command === "/join") {
+        return await this.joinSesi(groupId, userId, chatId, permintaan.updateId);
+      }
+
       // ====== GAMEPLAY COMMANDS (Milestone wiring) ======
       // Seluruh command gameplay membutuhkan sesi aktif (bukan LOBBY terminal).
       // Argumen dipakai persis sesuai kontrak domain; rendering hanya lapisan tipis.
       const teksArgs = typeof permintaan.text === "string" ? permintaan.text.trim() : "";
       const argumen = teksArgs.split(/\s+/).slice(1).filter((bagian) => bagian.length > 0);
+
+      // SECURITY BOUNDARY (BLOCKER 2) — validasi argument/ID di satu boundary.
+      // Argumen gameplay (sceneId/objectId/suspectId/evidenceRef) ditangani seragam
+      // SEBELUM dispatch mutasi: panjang per-argumen dan jumlah argumen dibatasi.
+      // Menghindari duplicate validation di tiap command gameplay.
+      if (argumen.length > MAKS_JUMLAH_ARGUMEN) {
+        return gagal(new KesalahanValidasi(`Terlalu banyak argumen (maks ${MAKS_JUMLAH_ARGUMEN}).`));
+      }
+      for (const bagian of argumen) {
+        const validasiArg = validasiInputTelegram(bagian, MAKS_PANJANG_ARGUMEN);
+        if (!validasiArg.valid) {
+          return gagal(new KesalahanValidasi(validasiArg.alasan ?? "argumen tidak valid"));
+        }
+      }
 
       if (command === "/investigate") {
         return this.lakukanInvestigasi(groupId, userId, argumen, chatId, permintaan.updateId);
@@ -212,6 +287,169 @@ export class KomandoTelegramLayanan {
       }
       return gagal(new KesalahanValidasi("Gagal memproses perintah Telegram."));
     }
+  }
+
+  /**
+   * /join — mutasi participant atomic (BLOCKER 1, PERSIST-04):
+   * read grup → klaim idempotency key → read sesi → validasi state →
+   * tambahDetektifKeSesi (rule max-6 milik domain) → simpan sesi → event,
+   * semuanya dalam SATU transaction Firestore. Concurrency: dua user yang
+   * join bersamaan pada slot terakhir dieksekusi berurutan oleh transaction;
+   * tepat satu menambah playerIds (yang lain melihat count sudah penuh).
+   *
+   * State gate sesuai docs/03-gameplay.md §3.2.1 + docs/02-product-scope & docs/BETA-READINESS:
+   * - LOBBY: "Terbatas pada join/start/configuration" → join diizinkan;
+   * - OPEN: sesi sudah dimulai (lobby ditutup) → join DITOLAK ("tombol join
+   *   dinonaktifkan setelah lobby ditutup", "spectator tidak join mid-session");
+   * - PAUSED: "Tidak allowed" → ditolak;
+   * - CLEARED / ARCHIVED: terminal → ditolak.
+   *
+   * Idempotensi: user yang sudah di playerIds tidak diduplikasi (domain
+   * helper mengembalikan sesi apa adanya) dan response tetap sukses;
+   * duplicate Telegram update sama → safe replay via idempotency key.
+   */
+  private async joinSesi(groupId: IdGrup, userId: IdPemain, chatId: string, updateId: string): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    // Delivery-level idempotency (docs/21.5): satu klaim per update Telegram.
+    // Kunci update-id menjamin duplicate DELIVERY (Telegram mengulang update
+    // yang sama) tidak memutasi dua kali. "Sudah menjadi detective" (join
+    // ulang dengan update BARU) ditangani oleh domain helper tambahDetektifKeSesi
+    // — bukan oleh kunci idempotensi — sehingga response-nya ramah ("sudah
+    // join"), bukan error, dan tetap tidak membuat participant duplicate.
+    const actionId = `telegram:update:${updateId}`;
+
+    // Preflight di luar transaction: sesi harus ada dan dalam state yang
+    // mengizinkan join. Keputusan otoritatif tetap diulang dalam transaction.
+    const grup = await this.konfigurasi.repositoriGrup.ambil(groupId);
+    if (!grup || grup.status !== "ACTIVE") {
+      return gagal(new KesalahanValidasi("Grup tidak ditemukan atau dinonaktifkan."));
+    }
+    const sesiAktif = await this.ambilSesiDariGrup(grup);
+    if (!sesiAktif) {
+      const pesan = "Tidak ada sesi aktif. Admin grup dapat memulai dengan /newcase.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+      return berhasil({ command: "/join", message: pesan });
+    }
+    if (sesiAktif.status === StatusSesi.CLEARED) {
+      const pesan = "Sesi ini sudah selesai dan tidak menerima peserta baru.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+      return berhasil({ command: "/join", message: pesan });
+    }
+    if (sesiAktif.status === StatusSesi.OPEN) {
+      const pesan = "Sesi sudah dimulai dan tidak menerima peserta baru. Bergabunglah pada lobby sebelum /startcase.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+      return berhasil({ command: "/join", message: pesan });
+    }
+    if (sesiAktif.status === StatusSesi.PAUSED) {
+      const pesan = "Sesi sedang dijeda dan tidak menerima peserta baru.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+      return berhasil({ command: "/join", message: pesan });
+    }
+    if (sesiAktif.status === StatusSesi.ARCHIVED) {
+      const pesan = "Sesi ini sudah diarsipkan dan tidak menerima peserta baru.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+      return berhasil({ command: "/join", message: pesan });
+    }
+
+    const waktuSekarang = this.konfigurasi.waktu.sekarangIso();
+    let sudahMenjadiDetektif = true;
+    let eventJoinBaru: KejadianDomain | null = null;
+    let eventTertulisDalamTransaksi = false;
+
+    let sesiHasil: SesiKasus;
+    try {
+      sesiHasil = await this.konfigurasi.repositoriSesiKasus.transaksi(async (transaction) => {
+      // (1) read state otoritatif dalam transaction.
+      const grupTx = await this.konfigurasi.repositoriGrup.ambil(groupId, transaction);
+      if (!grupTx || grupTx.status !== "ACTIVE") {
+        throw new KesalahanValidasi("Grup tidak ditemukan atau dinonaktifkan.");
+      }
+      const sesiTx = await this.ambilSesiDariGrup(grupTx, transaction);
+      if (!sesiTx) {
+        throw new KesalahanValidasi("Tidak ada sesi aktif untuk grup ini.");
+      }
+
+      // (2) klaim idempotency key secara atomic — duplicate delivery
+      //     → throw KesalahanIdempoten → rollback → safe replay di catch.
+      const klaim = await this.klaimKunciIdempoten(actionId, sesiTx.sessionId, transaction);
+      if (klaim) {
+        throw new KesalahanIdempoten("Duplicate Telegram update telah diproses.");
+      }
+
+      // (3) state gate final — join hanya saat sesi BELUM dimulai (LOBBY).
+      //     OPEN/PAUSED/CLEARED/ARCHIVED menolak join (docs/03 §3.2.1,
+      //     docs/02 — tombol join nonaktif setelah lobby ditutup).
+      if (sesiTx.status !== StatusSesi.LOBBY) {
+        throw new KesalahanValidasi(
+          `Sesi berstatus ${sesiTx.status} tidak mengizinkan join.`,
+        );
+      }
+
+      // (4) rule max-6 + anti-duplikasi milik domain — JANGAN di-reimplementasi
+      //     di handler. Duplicate join mengembalikan sesi apa adanya.
+      sudahMenjadiDetektif = sesiTx.playerIds.includes(userId);
+      const sesiBaru = tambahDetektifKeSesi(sesiTx, userId, waktuSekarang);
+
+      // (5) persist mutasi kanonik.
+      await this.konfigurasi.repositoriSesiKasus.simpan(sesiBaru, transaction);
+
+      // (6) event PLAYER_JOINED hanya untuk join baru (bukan replay/duplicate).
+      // Persist atomic bersama mutasi kanonik; bila publisher tidak mendukung
+      // transaction, fallback post-commit dikirim setelah commit (PERSIST-07).
+      if (!sudahMenjadiDetektif) {
+        eventJoinBaru = {
+          eventId: buatIdEvent(`evt-${actionId}-PLAYER_JOINED`) as IdEvent,
+          eventVersion: 1,
+          sessionId: sesiBaru.sessionId,
+          groupId,
+          actorUserId: userId,
+          type: JenisKejadianDomain.PLAYER_JOINED,
+          payload: {
+            sessionId: String(sesiBaru.sessionId),
+            participantCount: sesiBaru.playerIds.length,
+            maxActive: BATAS_DETEKTIF_AKTIF,
+          },
+          actionId,
+          occurredAt: waktuSekarang,
+        };
+        eventTertulisDalamTransaksi = this.catatEventDalamTransaksi(eventJoinBaru, transaction);
+      }
+
+      return sesiBaru;
+      });
+    } catch (error) {
+      // Keputusan otoritatif di dalam transaction: sesi penuh / state menolak
+      // join → beri pesan jelas ke chat. KesalahanIdempoten diteruskan ke catch
+      // prosesUpdate sebagai safe replay (duplicate delivery, tanpa mutasi kedua).
+      if (error instanceof KesalahanIdempoten) {
+        throw error;
+      }
+      if (error instanceof KesalahanValidasi) {
+        const pesan = error.message;
+        await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+        return berhasil({ command: "/join", message: pesan });
+      }
+      throw error;
+    }
+
+    // Event persistence fallback (post-commit) bila publisher tidak mendukung tx.
+    if (eventJoinBaru && !eventTertulisDalamTransaksi) {
+      await this.konfigurasi.penerbitEventDomain.kirim(eventJoinBaru);
+    }
+
+    let pesan: string;
+    if (sudahMenjadiDetektif) {
+      pesan = "Anda sudah menjadi Detective aktif pada sesi ini.";
+    } else {
+      pesan = `Anda bergabung sebagai Detective aktif (${sesiHasil.playerIds.length}/${BATAS_DETEKTIF_AKTIF}).`;
+    }
+    this.konfigurasi.logger?.info?.("join diproses", {
+      groupId: String(groupId),
+      sessionId: String(sesiHasil.sessionId),
+      sudahDetektif: sudahMenjadiDetektif,
+      participantCount: sesiHasil.playerIds.length,
+    });
+    await this.kirimPesanAman(chatId, pesan, { command: "/join", updateId: actionId });
+    return berhasil({ command: "/join", message: pesan, session: sesiHasil });
   }
 
   /**

@@ -13,6 +13,12 @@ function buatLayanan(sesiAwal: SesiKasus) {
   const store: Record<string, SesiKasus> = { [String(sesiAwal.sessionId)]: sesiAwal };
   const events: any[] = [];
 
+  // Serialisasi manual `transaksi`, menyerupai retry/commit Firestore: panggilan
+  // berikutnya menunggu panggilan sebelumnya selesai commit sehingga membaca
+  // state terkini. Tanpa ini, runner bersamaan melihat snapshot yang sama dan
+  // lapisan idempotency domain tidak dapat diverifikasi (lost-update duplikat).
+  let antreanTransaksi: Promise<unknown> = Promise.resolve();
+
   const layanan = new LayananInterogasiKasus({
     repositoriSesi: {
       ambil: async (id) => store[String(id)] ?? null,
@@ -20,7 +26,12 @@ function buatLayanan(sesiAwal: SesiKasus) {
         store[String(sesi.sessionId)] = sesi;
         return sesi;
       },
-      transaksi: async (runner) => runner({} as any),
+      transaksi: async (runner) => {
+        const jalankan = async () => runner({} as any);
+        const berikutnya = antreanTransaksi.then(jalankan, jalankan);
+        antreanTransaksi = berikutnya.then(() => undefined, () => undefined);
+        return berikutnya;
+      },
     },
     repositoriCaseBible: new RepositoriCaseBibleStatis([{ ...goldenCaseBible, caseBibleRef: "case-bible:CASE-001:golden" }]),
     penerbitEventDomain: { kirim: async (e) => { events.push(e); } },

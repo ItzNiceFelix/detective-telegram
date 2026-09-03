@@ -74,10 +74,17 @@ test("webhook secret hilang â†’ 401", async () => {
   assert.equal(hasil.status, 401);
 });
 
-test("malformed update (tanpa message) â†’ 400 tanpa mutasi", async () => {
+test("update tanpa message (mis. my_chat_member/edited_message) â†' 200 ignored tanpa mutasi", async () => {
+  // Locked contract (api/telegram.ts): update dengan update_id valid tapi tanpa
+  // konten message/callback_query dianggap ack (200 ignored) supaya Telegram
+  // tidak menahan antrian dengan retry â€" bukan error. Payload tsb BUKAN 400;
+  // 400 hanya untuk JSON rusak, body kosong, atau update_id tidak ada.
   const { firestore } = siapkan();
   const hasil = await handlerInternal(permintaanWebhook({ update_id: 2 }));
-  assert.equal(hasil.status, 400);
+  assert.equal(hasil.status, 200);
+  const body = JSON.parse(hasil.body) as { ok?: boolean; ignored?: boolean };
+  assert.equal(body.ok, true);
+  assert.equal(body.ignored, true);
   assert.equal(firestore.jumlahDokumen("case_sessions"), 0);
 });
 
