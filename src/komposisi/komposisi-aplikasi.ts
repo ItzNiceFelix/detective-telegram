@@ -32,6 +32,8 @@ import { RepositoriAsetVisualFirestore } from "../infrastructure/repositories/fi
 import { LayananProduksiKasus } from "../application/services/layanan-produksi-kasus.js";
 import { PenyimpananGambarFirebase } from "../infrastructure/adapters/storage/penyimpanan-gambar-firebase.js";
 import { PenyimpananAsetTelegram } from "../infrastructure/adapters/storage/penyimpanan-aset-telegram.js";
+import { RepositoriTugasAsetFirestore } from "../infrastructure/repositories/firestore/repositori-tugas-aset.js";
+import { LayananTugasAset } from "../application/services/layanan-tugas-aset.js";
 import { KesalahanKonfigurasi } from "../fondasi/eror.js";
 
 /**
@@ -61,6 +63,10 @@ export interface OpsiKomposisiAplikasi {
   penyediaTeks?: PintuAi | undefined;
   penyediaGambar?: KontrakPenyediaGambar | undefined;
   penyimpananGambar?: KontrakPenyimpananGambar | undefined;
+  /** Chat vault asset (test overrides). Default: env TELEGRAM_ASSET_VAULT_CHAT_ID. */
+  vaultChatId?: string | undefined;
+  /** Validasi admin vault (test overrides). Default: getChatMember creator/admin. */
+  validasiAdminVault?: (userId: string, chatId: string) => Promise<boolean> | undefined;
 }
 
 export interface KomposisiAplikasi {
@@ -92,6 +98,9 @@ export interface KomposisiAplikasi {
   readonly penyimpananGambar?: KontrakPenyimpananGambar | undefined;
   readonly repositoriAsetVisual: RepositoriAsetVisualFirestore;
   readonly layananProduksiKasus: LayananProduksiKasus;
+  // AssetTask Human-in-the-Loop (Beta)
+  readonly repositoriTugasAset: RepositoriTugasAsetFirestore;
+  readonly layananTugasAset: LayananTugasAset;
 }
 
 /**
@@ -195,6 +204,25 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   // default/firebase -> PenyimpananGambarFirebase (canonical future).
   const penyimpananGambar = opsi.penyimpananGambar ?? bangunPenyimpananGambar(konfigurasiAi, process.env, pengirimTelegram);
 
+  // AssetTask Human-in-the-Loop (Beta) — docs/AI-IMAGE-HUMAN-IN-LOOP-DECISION.md.
+  const repositoriTugasAset = new RepositoriTugasAsetFirestore(firestore);
+  const vaultChatId = (opsi.vaultChatId ?? (process.env.TELEGRAM_ASSET_VAULT_CHAT_ID ?? "").trim()) || undefined;
+  const validasiAdminVault: (userId: string, chatId: string) => Promise<boolean> =
+    (opsi.validasiAdminVault ??
+      (async (userId: string, chatId: string): Promise<boolean> => {
+        const status = await pengirimTelegram.ambilStatusAnggota(chatId, userId);
+        return status === "creator" || status === "administrator";
+      })) as (userId: string, chatId: string) => Promise<boolean>;
+  const layananTugasAset = new LayananTugasAset({
+    repositoriTugas: repositoriTugasAset,
+    repositoriAset: repositoriAsetVisual,
+    vaultChatId,
+    waktu,
+    pembuatIdTugas: () => `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    kirimPesan: (chatId, text) => pengirimTelegram.kirimPesanTelegram(chatId, text),
+    validasiAdminVault,
+  });
+
 
   // Validasi grup/akses/admin â€” bukan lagi return true.
   const validatorGrupTelegram = new ValidatorGrupTelegram(repositoriGrup, waktu);
@@ -259,7 +287,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     penerbitEventDomain,
     kontrakIdempoten: repositoriIdempoten,
     waktu,
-    kirimPesanTelegram: (chatId, pesan) => pengirimTelegram.kirimPesanTelegram(chatId, pesan),
+    kirimPesanTelegram: (chatId, pesan) => pengirimTelegram.kirimPesanTelegram(chatId, pesan).then(() => undefined),
     validasiAksesTelegram: (userId, chatId) => validatorAksesTelegram.validasi(userId, chatId),
     validasiGroupTelegram: (chatId) => validatorGrupTelegram.validasi(chatId),
     validasiAdminGrup: (userId, chatId) => validatorAdminGrupTelegram.validasi(userId, chatId),
@@ -301,6 +329,8 @@ konfigurasiAi,
     penyimpananGambar,
     repositoriAsetVisual,
     layananProduksiKasus,
+    repositoriTugasAset,
+    layananTugasAset,
   };
 }
 

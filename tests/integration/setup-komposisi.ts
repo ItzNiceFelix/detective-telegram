@@ -19,6 +19,8 @@ export interface OpsiUjiAi {
   konfigurasiAi?: KonfigurasiAi;
   penyediaTeks?: PintuAi | undefined;
   penyediaGambar?: KontrakPenyediaGambar | undefined;
+  /** Chat vault asset utk test Human-in-the-Loop. */
+  vaultChatId?: string;
 }
 
 export function buatKomposisiUji(statusAnggota: Record<string, string> = {}, opsiAi?: OpsiUjiAi): KomposisiUji {
@@ -32,6 +34,7 @@ export function buatKomposisiUji(statusAnggota: Record<string, string> = {}, ops
     ...(opsiAi?.konfigurasiAi !== undefined ? { konfigurasiAi: opsiAi.konfigurasiAi } : {}),
     ...(opsiAi?.penyediaTeks !== undefined ? { penyediaTeks: opsiAi.penyediaTeks } : {}),
     ...(opsiAi?.penyediaGambar !== undefined ? { penyediaGambar: opsiAi.penyediaGambar } : {}),
+    ...(opsiAi?.vaultChatId !== undefined ? { vaultChatId: opsiAi.vaultChatId } : {}),
   });
 
   return { firestore, telegram, komposisi };

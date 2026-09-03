@@ -92,6 +92,20 @@ export async function handlerInternal(
   }
 
   const update = komposisi.pengirimTelegram.parseUpdate(payload);
+
+  // Beta Human-in-the-Loop: submission foto (reply) di Asset Vault → AssetTask.
+  // Idempotent (service menangani kiriman duplikat). Bukan API endpoint baru.
+  const kirimanFoto = komposisi.pengirimTelegram.ekstrakKirimanFoto(payload);
+  if (kirimanFoto) {
+    const hasilAset = await komposisi.layananTugasAset.terimaPengirimanAset(kirimanFoto);
+    if (hasilAset.status === "accepted") {
+      return { status: 200, body: JSON.stringify({ ok: true, assetSubmission: "accepted", taskId: hasilAset.taskId }) };
+    }
+    if (hasilAset.status === "rejected") {
+      return { status: 200, body: JSON.stringify({ ok: true, assetSubmission: "rejected", reason: hasilAset.reason }) };
+    }
+    return { status: 200, body: JSON.stringify({ ok: true, ignored: true }) };
+  }
 const punyaKonten = payload !== null && typeof payload === "object" &&
   ("message" in (payload as Record<string, unknown>) || "callback_query" in (payload as Record<string, unknown>));
 

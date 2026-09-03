@@ -40,6 +40,18 @@ export interface TagihanFotoTelegram {
   sizeBytes?: number;
 }
 
+/** Data submission foto reply inbound (parsing webhook) — struktural saja. */
+export interface KirimanFotoTelegram {
+  updateId: string;
+  chatId: string | undefined;
+  userId: string | undefined;
+  replyToMessageId: number | undefined;
+  fileId: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+}
+
 /** Dependency sempit untuk storage: capability adapter, TANPA business logic. */
 export interface PintuKirimFotoTelegram {
   kirimFotoTelegram(chatId: string, foto: ObyekKirimFotoTelegram): Promise<TagihanFotoTelegram>;
@@ -78,6 +90,26 @@ function luasFoto(f: { width?: unknown; height?: unknown } | undefined): number 
   const w = typeof f.width === "number" ? f.width : 0;
   const h = typeof f.height === "number" ? f.height : 0;
   return w * h;
+}
+
+/** Pilih `file_id` dari foto resolusi tertinggi; null bila tidak ada. */
+export function ambilFileIdFoto(
+  foto: Array<{ file_id?: unknown; width?: unknown; height?: unknown; file_size?: unknown }>,
+): { fileId: string; width?: number; height?: number; sizeBytes?: number } | null {
+  let tertinggi = foto[0];
+  for (const p of foto) {
+    if (luasFoto(p) > luasFoto(tertinggi)) tertinggi = p;
+  }
+  const fileId = typeof tertinggi?.file_id === "string" ? tertinggi.file_id : "";
+  if (!fileId) return null;
+  const hasil: { fileId: string; width?: number; height?: number; sizeBytes?: number } = { fileId };
+  const lebar = nilaiAngka(tertinggi?.width);
+  const tinggi = nilaiAngka(tertinggi?.height);
+  const ukuran = nilaiAngka(tertinggi?.file_size);
+  if (lebar !== undefined) hasil.width = lebar;
+  if (tinggi !== undefined) hasil.height = tinggi;
+  if (ukuran !== undefined) hasil.sizeBytes = ukuran;
+  return hasil;
 }
 
 function nilaiAngka(v: unknown): number | undefined {
@@ -146,7 +178,7 @@ export class TelegramAdapter implements PintuTelegram {
 
   /** Kirim pesan ke chat Telegram via Bot API `sendMessage`. */
   async kirim(respon: ResponTelegram): Promise<void> {
-    return this.kirimPesanTelegram(respon.chatId, respon.text);
+    await this.kirimPesanTelegram(respon.chatId, respon.text);
   }
 
   /**
@@ -154,15 +186,18 @@ export class TelegramAdapter implements PintuTelegram {
    * (PERSIST-07) — tidak pernah di dalam transaction. Kegagalan menghasilkan
    * KesalahanIntegrasi terstruktur; token tidak pernah masuk ke pesan error.
    */
-  async kirimPesanTelegram(chatId: string, text: string): Promise<void> {
+  async kirimPesanTelegram(chatId: string, text: string): Promise<number> {
     if (!this.botToken) {
       throw new KesalahanKonfigurasi("TELEGRAM_BOT_TOKEN belum dikonfigurasi.");
     }
 
-    await this.panggilApiTelegram("sendMessage", {
+    const data = (await this.panggilApiTelegram("sendMessage", {
       chat_id: chatId,
       text,
-    });
+    })) as ResponApiTelegram;
+    const result = data.result as { message_id?: unknown } | undefined;
+    const messageId = typeof result?.message_id === "number" ? result.message_id : 0;
+    return messageId;
   }
 
   /**
@@ -237,6 +272,39 @@ export class TelegramAdapter implements PintuTelegram {
     if (tinggi !== undefined) hasil.height = tinggi;
     if (ukuran !== undefined) hasil.sizeBytes = ukuran;
     return hasil;
+  }
+
+  /**
+   * Ekstrak submission foto (photo reply) dari update Telegram inbound.
+   * Hanya mengembalikan data estrutural; TIDAK pernah menyimpan full message
+   * ataupun binary. `photo[].file_id` resolusi tertinggi -> referensi beta.
+   * Mengembalikan null bila update bukan photo reply/photo.
+   */
+  ekstrakKirimanFoto(payload: unknown): KirimanFotoTelegram | null {
+    const data = (payload ?? {}) as Record<string, unknown>;
+    const msg = data.message && typeof data.message === "object" ? (data.message as Record<string, unknown>) : undefined;
+    if (!msg) return null;
+
+    const chat = msg.chat && typeof msg.chat === "object" ? (msg.chat as Record<string, unknown>) : undefined;
+    const from = msg.from && typeof msg.from === "object" ? (msg.from as Record<string, unknown>) : undefined;
+    const photo = Array.isArray(msg.photo) ? msg.photo : [];
+    const pilih = ambilFileIdFoto(photo);
+    if (!pilih) return null;
+
+    const balasan = msg.reply_to_message && typeof msg.reply_to_message === "object" ? (msg.reply_to_message as Record<string, unknown>) : undefined;
+    const replyMessageId = typeof balasan?.message_id === "number" ? balasan.message_id : undefined;
+
+    const kiriman: KirimanFotoTelegram = {
+      updateId: typeof data.update_id === "number" ? String(data.update_id) : "",
+      chatId: chat && typeof chat.id === "number" ? String(chat.id) : chat && typeof chat.id === "string" ? chat.id : undefined,
+      userId: from && typeof from.id === "number" ? String(from.id) : undefined,
+      replyToMessageId: replyMessageId,
+      fileId: pilih.fileId,
+    };
+    if (pilih.width !== undefined) kiriman.width = pilih.width;
+    if (pilih.height !== undefined) kiriman.height = pilih.height;
+    if (pilih.sizeBytes !== undefined) kiriman.sizeBytes = pilih.sizeBytes;
+    return kiriman;
   }
 
   private async panggilApiTelegram(metode: string, payload: Record<string, unknown>): Promise<unknown> {

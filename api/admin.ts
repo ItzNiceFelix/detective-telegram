@@ -159,11 +159,11 @@ async function handlerInternal(request: PermintaanHttpAdmin = {}, komposisi?: Ko
       }
       // ASSET-STORAGE-DECISION: reference wajib ada & terverifikasi (bukan UNAVAILABLE/SUSPECT).
       const asetTakValid = manifest.assets.find(
-        (aset) => (!aset.uri || aset.uri.trim() === "") || aset.status === "UNAVAILABLE",
+        (aset) => (!aset.uri || aset.uri.trim() === "") || aset.status === "UNAVAILABLE" || !aset.verifiedAt,
       );
       if (asetTakValid) {
-        catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, reason: "invalid_asset_reference", assetId: asetTakValid.assetId });
-        return { status: 422, body: JSON.stringify({ ok: false, error: "Terdapat asset tanpa reference valid/UNAVAILABLE — tidak dapat dipublish." }) };
+        catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, reason: "invalid_or_unverified_asset_reference", assetId: asetTakValid.assetId });
+        return { status: 422, body: JSON.stringify({ ok: false, error: "Terdapat asset tanpa reference valid / belum VERIFIED — tidak dapat dipublish (Human-in-the-Loop)." }) };
       }
     }
     try {
@@ -248,6 +248,39 @@ async function handlerInternal(request: PermintaanHttpAdmin = {}, komposisi?: Ko
       manifest: { caseId: manifest.caseId, version: manifest.version, assetCount: manifest.assets.length,
         assets: manifest.assets.map((a) => ({ assetId: a.assetId, planId: a.planId, sceneId: a.sceneId, uri: a.uri, status: a.status })) },
     }) };
+  }
+
+  if (action === "verifyAssetTask") {
+    const taskId = typeof payload.taskId === "string" ? payload.taskId : "";
+    if (!taskId) {
+      return { status: 400, body: JSON.stringify({ ok: false, error: "verifyAssetTask membutuhkan payload.taskId" }) };
+    }
+    let tugas;
+    try {
+      tugas = await komposisiTerpakai.layananTugasAset.verifikasiTugasAset(taskId);
+    } catch (error) {
+      catatAuditAdmin(adminId, action, "failed", { taskId, error: error instanceof Error ? error.name : "unknown" });
+      return { status: 422, body: JSON.stringify({ ok: false, error: `verifikasi ditolak: ${error instanceof Error ? error.message : "unknown"}` }) };
+    }
+    catatAuditAdmin(adminId, action, "ok", { taskId, status: tugas.status });
+    return { status: 200, body: JSON.stringify({ ok: true, action, task: { taskId: tugas.taskId, status: tugas.status, verifiedAt: tugas.verifiedAt ?? null } }) };
+  }
+
+  if (action === "rejectAssetTask") {
+    const taskId = typeof payload.taskId === "string" ? payload.taskId : "";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    if (!taskId) {
+      return { status: 400, body: JSON.stringify({ ok: false, error: "rejectAssetTask membutuhkan payload.taskId" }) };
+    }
+    let tugas;
+    try {
+      tugas = await komposisiTerpakai.layananTugasAset.tolakTugasAset(taskId, reason);
+    } catch (error) {
+      catatAuditAdmin(adminId, action, "failed", { taskId, error: error instanceof Error ? error.name : "unknown" });
+      return { status: 422, body: JSON.stringify({ ok: false, error: `penolakan ditolak: ${error instanceof Error ? error.message : "unknown"}` }) };
+    }
+    catatAuditAdmin(adminId, action, "ok", { taskId, status: tugas.status });
+    return { status: 200, body: JSON.stringify({ ok: true, action, task: { taskId: tugas.taskId, status: tugas.status } }) };
   }
 
   if (action === "rejectCandidate") {

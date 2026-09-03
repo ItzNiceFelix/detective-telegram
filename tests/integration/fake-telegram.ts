@@ -47,6 +47,7 @@ export interface FetchTelegramPalsu {
 export function buatFetchTelegramPalsu(statusAnggota: Record<string, string> = {}): FetchTelegramPalsu {
   const panggilan: PanggilanTelegram[] = [];
   const metodeGagal = new Map<string, Error>();
+  let sendCounter = 0;
 
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -63,7 +64,8 @@ export function buatFetchTelegramPalsu(statusAnggota: Record<string, string> = {
       new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
     if (metode === "sendMessage") {
-      return buatRespon({ ok: true, result: { message_id: 1, chat: { id: payload.chat_id } } });
+      sendCounter += 1;
+      return buatRespon({ ok: true, result: { message_id: sendCounter, chat: { id: payload.chat_id } } });
     }
 
     if (metode === "getChatMember") {

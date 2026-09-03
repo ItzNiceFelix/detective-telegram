@@ -84,6 +84,7 @@ function buatAsetUji(caseId: string): AsetVisual {
     requiredClues: [],
     forbiddenClues: [],
     createdAt: "2026-02-01T00:00:00.000Z",
+    verifiedAt: "2026-02-01T00:00:00.000Z",
   };
 }
 
