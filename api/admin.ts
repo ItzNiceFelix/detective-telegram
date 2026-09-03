@@ -7,6 +7,10 @@ import { arsipkanSesi } from "../src/domain/services/transisi-sesi.js";
 import type { SesiKasus } from "../src/domain/entities.js";
 import { StatusSesi } from "../src/domain/enums.js";
 import { buatIdKasus, buatIdSesiKasus, buatIdVersiKasus } from "../src/fondasi/primitif.js";
+import { KesalahanProviderAi } from "../src/ai/errors.js";
+import type { BenihKasus } from "../src/kasus/generasi-kasus.js";
+import type { VisualPlan } from "../src/ai/visual-pipeline.js";
+
 
 interface PermintaanHttpAdmin {
   method?: string | undefined;
@@ -27,9 +31,13 @@ interface ResponHttpAdmin {
  * - inspectSession   : read-only diagnostik sesi (opsional untuk beta).
  * - forceArchive     : operasional — arsipkan sesi stuck, mengikuti state machine.
  * - healthDiagnostic : status tanpa membocorkan secret.
- * rejectCandidate/regenerateCase TIDAK diimplementasikan (pipeline AI real-time
- * bukan bagian beta) — didokumentasikan sebagai manual operation, bukan endpoint
- * boneka yang mengarang fakta.
+ * - generateCase    : AI case generation (ADMIN/OFFLINE only; provider dari
+ *                     config; publish hanya lewat publish gate deterministik).
+ * - generateImages  : AI image generation (ADMIN/OFFLINE only; metadata/ref
+ *                     durable, BUKAN binary - lihat VISUAL_02/03).
+ * - rejectCandidate : guard terdokumentasi (no-op) - kandidat yang gagal validasi
+ *                     TIDAK PERNAH dipublish; tidak ada mutasi di sini.
+ * - regenerateCase  : belum diimplementasikan -> 400 unsupported admin action.
  *
  * Keamanan: authenticated + authorized + auditable; tidak pernah membocorkan
  * secret/token ke response atau log; TIDAK ada arbitrary Firestore mutation.
@@ -139,6 +147,17 @@ async function handlerInternal(request: PermintaanHttpAdmin = {}, komposisi?: Ko
       catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, status: "DISABLED" });
       return { status: 422, body: JSON.stringify({ ok: false, error: "CaseVersion dinonaktifkan — tidak dapat dipublish" }) };
     }
+    // Part C — kandidat AI TIDAK boleh menjadi PUBLISHED bila mandatory image
+    // assets durable belum ada. Kandidat ber-prefix "Generated case:" (hasil
+    // layanan produksi) diwajibkan punya manifest aset non-kosong terlebih dulu.
+    const kandidatAi = typeof versi.contentSummary === "string" && versi.contentSummary.startsWith("Generated case:");
+    if (kandidatAi) {
+      const manifest = await komposisiTerpakai.repositoriAsetVisual.ambilManifest(caseIdStr);
+      if (!manifest || manifest.assets.length === 0) {
+        catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, reason: "incomplete_asset_manifest" });
+        return { status: 422, body: JSON.stringify({ ok: false, error: "Case assets belum lengkap — generate image assets durable dahulu sebelum publish." }) };
+      }
+    }
     try {
       const versiTerbit = publikasiVersiKasus(versi, waktuSekarang);
       await komposisiTerpakai.repositoriVersiKasus.simpanVersiKasus(versiTerbit);
@@ -187,19 +206,106 @@ async function handlerInternal(request: PermintaanHttpAdmin = {}, komposisi?: Ko
     }
   }
 
-  if (action === "rejectCandidate" || action === "regenerateCase") {
-    catatAuditAdmin(adminId, action, "manual_operation", {});
-    return {
-      status: 501,
-      body: JSON.stringify({
-        ok: false,
-        error: "manual_operation",
-        message: `${action} tidak diimplementasikan untuk beta; lakukan sebagai manual operation (pipeline AI/real-time di luar scope beta).`,
-      }),
-    };
+  if (action === "generateCase") {
+    const seed = parseBenihKasus(payload);
+    let hasil;
+    try {
+      const opsiGen = typeof payload.model === "string" ? { model: payload.model } : {};
+      hasil = await komposisiTerpakai.layananProduksiKasus.generateCase(seed, opsiGen);
+    } catch (error) {
+      return tanganiErorProduksiAi(adminId, action, error, { seed: seed.genre });
+    }
+    catatAuditAdmin(adminId, action, "ok", { caseId: String(hasil.caseId), versionId: String(hasil.versionId) });
+    return { status: 200, body: JSON.stringify({
+      ok: true, action,
+      candidate: { caseId: String(hasil.caseId), versionId: String(hasil.versionId), title: hasil.metadata?.title ?? "", caseBibleRef: hasil.caseBibleRef, assetManifestRef: hasil.assetManifestRef },
+    }) };
+  }
+
+  if (action === "generateImages") {
+    const caseIdStr = typeof payload.caseId === "string" ? payload.caseId : "";
+    const plans = parseVisualPlans(payload.plans);
+    if (!caseIdStr || plans.length === 0) {
+      return { status: 400, body: JSON.stringify({ ok: false, error: "generateImages membutuhkan payload.caseId dan payload.plans (VisualPlan[])." }) };
+    }
+    let manifest;
+    try {
+      manifest = await komposisiTerpakai.layananProduksiKasus.generateImages(caseIdStr, plans);
+    } catch (error) {
+      return tanganiErorProduksiAi(adminId, action, error, { caseId: caseIdStr });
+    }
+    catatAuditAdmin(adminId, action, "ok", { caseId: caseIdStr, assetCount: manifest.assets.length });
+    return { status: 200, body: JSON.stringify({
+      ok: true, action,
+      manifest: { caseId: manifest.caseId, version: manifest.version, assetCount: manifest.assets.length,
+        assets: manifest.assets.map((a) => ({ assetId: a.assetId, planId: a.planId, sceneId: a.sceneId, uri: a.uri, status: a.status })) },
+    }) };
+  }
+
+  if (action === "rejectCandidate") {
+    catatAuditAdmin(adminId, action, "ok", {});
+    return { status: 200, body: JSON.stringify({ ok: true, action, message: "Invalid candidates are never published." }) };
   }
 
   return { status: 400, body: JSON.stringify({ ok: false, error: "unsupported admin action" }) };
+}
+
+function parseBenihKasus(payload: Record<string, unknown>): BenihKasus {
+  const seed = typeof payload.seed === "object" && payload.seed !== null ? (payload.seed as Record<string, unknown>) : {};
+  const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return {
+    genre: typeof seed.genre === "string" ? seed.genre : "MYSTERY",
+    setting: typeof seed.setting === "string" ? seed.setting : "generic",
+    difficulty: typeof seed.difficulty === "string" ? seed.difficulty : "DETECTIVE",
+    suspectCount: typeof seed.suspectCount === "number" ? seed.suspectCount : 3,
+    sceneCount: typeof seed.sceneCount === "number" ? seed.sceneCount : 2,
+    mustUseMechanics: strArr(seed.mustUseMechanics),
+  };
+}
+
+function parseVisualPlans(value: unknown): VisualPlan[] {
+  if (!Array.isArray(value)) return [];
+  const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return value
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item): VisualPlan => {
+      const p: VisualPlan = {
+        planId: typeof item.planId === "string" ? item.planId : "",
+        sceneId: typeof item.sceneId === "string" ? item.sceneId : "",
+        purpose: (typeof item.purpose === "string" ? item.purpose : "CRIME_SCENE") as VisualPlan["purpose"],
+        requiredClues: Array.isArray(item.requiredClues) ? (item.requiredClues as VisualPlan["requiredClues"]) : [],
+        forbiddenClues: Array.isArray(item.forbiddenClues) ? (item.forbiddenClues as VisualPlan["forbiddenClues"]) : [],
+        inspectableObjects: strArr(item.inspectableObjects),
+      };
+      if (Array.isArray(item.compositionNotes)) p.compositionNotes = strArr(item.compositionNotes);
+      if (Array.isArray(item.styleConstraints)) p.styleConstraints = strArr(item.styleConstraints);
+      if (Array.isArray(item.visualConstraints)) p.visualConstraints = strArr(item.visualConstraints);
+      return p;
+    })
+    .filter((p) => p.planId !== "" && p.sceneId !== "");
+}
+
+function tanganiErorProduksiAi(
+  adminId: string,
+  action: string,
+  error: unknown,
+  refs: Record<string, unknown>,
+): ResponHttpAdmin {
+  catatAuditAdmin(adminId, action, "failed", { ...refs, error: error instanceof Error ? error.name : "unknown" });
+  if (error instanceof KesalahanProviderAi) {
+    const status =
+      error.kategori === "AUTHENTICATION" || error.kategori === "PROVIDER_UNAVAILABLE" || error.kategori === "DISABLED" || error.kategori === "QUOTA_RATE_LIMIT"
+        ? 503
+        : 502;
+    return {
+      status,
+      body: JSON.stringify({ ok: false, error: "provider_error", kategori: error.kategori, message: error.message }),
+    };
+  }
+  return {
+    status: 422,
+    body: JSON.stringify({ ok: false, error: "generation_gagal", message: error instanceof Error ? error.message : "unknown" }),
+  };
 }
 
 // ===== Helpers (respons ringkas - tanpa secret) =====

@@ -7,6 +7,7 @@ import { buatVersiKasus, type VersiKasus } from "../../src/kasus/versi-kasus.js"
 import { buatIdGrup, buatIdKasus, buatIdSesiKasus, buatIdVersiKasus, buatWaktuIso } from "../../src/fondasi/primitif.js";
 import type { SesiKasus, Grup } from "../../src/domain/entities.js";
 import { StatusSesi } from "../../src/domain/enums.js";
+import { simpanReferensiAset, type AsetVisual } from "../../src/ai/visual-pipeline.js";
 
 const TOKEN = "admin-secret-token-abcdefgh-0123456789";
 process.env.ADMIN_SECRET_TOKEN = TOKEN;
@@ -69,6 +70,23 @@ async function simpanSesi(komposisi: KomposisiUji["komposisi"], sesi: SesiKasus)
   await komposisi.repositoriSesiKasus.simpan(sesi);
 }
 
+function buatAsetUji(caseId: string): AsetVisual {
+  return {
+    assetId: `asset-${caseId}-s1-p1`,
+    planId: "plan-s1-p1",
+    sceneId: "S1",
+    caseId,
+    provider: "gemini",
+    uri: `asset://memori/${caseId}/S1.png`,
+    status: "READY",
+    format: "image/png",
+    sizeBytes: 100,
+    requiredClues: [],
+    forbiddenClues: [],
+    createdAt: "2026-02-01T00:00:00.000Z",
+  };
+}
+
 test("BLOCKER 4 — tanpa token → 401 dan tidak ada mutasi", async () => {
   const { komposisi } = buatKomposisiUji({});
 
@@ -101,6 +119,25 @@ test("BLOCKER 4 — publishCase: DRAFT → PUBLISHED, idempotent, non-existent �
   const notFound = await handlerInternal(req("publishCase", { caseId: "CASE-000", versionId: "V1" }), komposisi);
   assert.equal(notFound.status, 404);
 });
+test("BLOCKER 4 — publishCase: kandidat AI tanpa asset durable → 422; dengan asset → 200", async () => {
+  const { komposisi } = buatKomposisiUji({});
+  const draftAi: VersiKasus = {
+    ...buatDraft("CASE-AI", "V1"),
+    contentSummary: "Generated case: Golden Heist — kandidat AI",
+  };
+  await komposisi.repositoriVersiKasus.simpanVersiKasus(draftAi);
+
+  // 1) Kandidat AI tanpa mandatory asset durable → publish DITOLAK (Part C).
+  const tanpaAsset = await handlerInternal(req("publishCase", { caseId: "CASE-AI", versionId: "V1" }), komposisi);
+  assert.equal(tanpaAsset.status, 422);
+
+  // 2) Setelah asset durable di-seed → publish berhasil 200.
+  await simpanReferensiAset(komposisi.repositoriAsetVisual, "CASE-AI", buatAsetUji("CASE-AI"));
+  const denganAsset = await handlerInternal(req("publishCase", { caseId: "CASE-AI", versionId: "V1" }), komposisi);
+  assert.equal(denganAsset.status, 200);
+  const body = JSON.parse(denganAsset.body) as { published: { status: string } };
+  assert.equal(body.published.status, "PUBLISHED");
+});
 test("BLOCKER 4 — inspectSession read-only", async () => {
   const { komposisi } = buatKomposisiUji({});
   await simpanSesi(komposisi, buatSesi(StatusSesi.OPEN, { score: 7 }));
@@ -130,15 +167,20 @@ test("BLOCKER 4 — forceArchive: PAUSED → ARCHIVED; OPEN ditolak state machin
   assert.equal(open.status, 422);
 });
 
-test("BLOCKER 4 — rejectCandidate/regenerateCase dibatasi sebagai manual operation", async () => {
+test("BLOCKER 4 — rejectCandidate no-op terdokumentasi; regenerateCase tidak didukung", async () => {
   const { komposisi } = buatKomposisiUji({});
+
+  // rejectCandidate: kandidat yang gagal validasi TIDAK PERNAH dipublish (publish
+  // gate deterministik) → endpoint adalah guard terdokumentasi, bukan mutasi.
   const reject = await handlerInternal(req("rejectCandidate", { caseId: "CASE-X", versionId: "V9" }), komposisi);
-  assert.equal(reject.status, 501);
-  assert.equal(JSON.parse(reject.body).error, "manual_operation");
+  assert.equal(reject.status, 200);
+  const bodyReject = JSON.parse(reject.body) as { ok: boolean; message: string };
+  assert.equal(bodyReject.ok, true);
+  assert.ok(bodyReject.message.length > 0);
 
   const regen = await handlerInternal(req("regenerateCase", { caseId: "CASE-X" }), komposisi);
-  assert.equal(regen.status, 501);
-  assert.equal(JSON.parse(regen.body).error, "manual_operation");
+  assert.equal(regen.status, 400);
+  assert.equal(JSON.parse(regen.body).error, "unsupported admin action");
 });
 
 test("BLOCKER 4 — action tidak dikenal → 400 (bukan endpoint bebas / arbitrary mutation)", async () => {

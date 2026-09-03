@@ -4,6 +4,9 @@ import { buatFetchTelegramPalsu, buatVersiKasusEmasTerbitan, type FetchTelegramP
 import { buatKomposisiAplikasi, type KomposisiAplikasi } from "../../src/komposisi/komposisi-aplikasi.js";
 import { WaktuFiktif } from "../../src/fondasi/waktu.js";
 import type { VersiKasus } from "../../src/kasus/versi-kasus.js";
+import type { PintuAi } from "../../src/ai/contracts.js";
+import type { KontrakPenyediaGambar } from "../../src/ai/visual-pipeline.js";
+import type { KonfigurasiAi } from "../../src/ai/konfigurasi.js";
 
 export interface KomposisiUji {
   firestore: FirestorePalsu;
@@ -11,7 +14,14 @@ export interface KomposisiUji {
   komposisi: KomposisiAplikasi;
 }
 
-export function buatKomposisiUji(statusAnggota: Record<string, string> = {}): KomposisiUji {
+/** Injeksi AI admin/offline untuk test. Default: provider tidak ada (deterministik). */
+export interface OpsiUjiAi {
+  konfigurasiAi?: KonfigurasiAi;
+  penyediaTeks?: PintuAi | undefined;
+  penyediaGambar?: KontrakPenyediaGambar | undefined;
+}
+
+export function buatKomposisiUji(statusAnggota: Record<string, string> = {}, opsiAi?: OpsiUjiAi): KomposisiUji {
   const firestore = new FirestorePalsu();
   const telegram = buatFetchTelegramPalsu(statusAnggota);
 
@@ -19,6 +29,9 @@ export function buatKomposisiUji(statusAnggota: Record<string, string> = {}): Ko
     firestore: firestore as unknown as Firestore,
     pengirimTelegram: { botToken: "TEST-TOKEN", fetchImpl: telegram.fetchImpl },
     waktu: new WaktuFiktif(new Date("2026-02-01T00:00:00.000Z")),
+    ...(opsiAi?.konfigurasiAi !== undefined ? { konfigurasiAi: opsiAi.konfigurasiAi } : {}),
+    ...(opsiAi?.penyediaTeks !== undefined ? { penyediaTeks: opsiAi.penyediaTeks } : {}),
+    ...(opsiAi?.penyediaGambar !== undefined ? { penyediaGambar: opsiAi.penyediaGambar } : {}),
   });
 
   return { firestore, telegram, komposisi };

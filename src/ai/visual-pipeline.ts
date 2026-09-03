@@ -1,4 +1,5 @@
 import { KesalahanValidasi } from "../fondasi/eror.js";
+import { KesalahanProviderAi } from "./errors.js";
 import type { PintuAi, PermintaanAi, ResponAi } from "./contracts.js";
 
 export type TujuanVisual = "CRIME_SCENE" | "LOCATION" | "PORTRAIT" | "EVIDENCE_CLOSEUP" | "REVEAL";
@@ -54,10 +55,70 @@ export interface KontrakPenyediaGambar {
 
 export interface KontrakRepositoriAsetVisual {
   ambilKunci(plan: VisualPlan, caseId: string): string;
-  ambil(kunci: string): AsetVisual | null;
-  simpan(aset: AsetVisual): AsetVisual;
-  ambilManifest(caseId: string): ManifestAsetVisual | null;
-  simpanManifest(manifest: ManifestAsetVisual): ManifestAsetVisual;
+  ambil(kunci: string): Promise<AsetVisual | null>;
+  simpan(aset: AsetVisual): Promise<AsetVisual>;
+  ambilManifest(caseId: string): Promise<ManifestAsetVisual | null>;
+  simpanManifest(manifest: ManifestAsetVisual): Promise<ManifestAsetVisual>;
+}
+
+// ===== Object storage durable untuk binary image (diisolasi di balik kontrak).
+// SDK storage TIDAK boleh berada di domain; implementasi rill (Firebase Storage)
+// hidup di src/infrastructure. Durable URI yang disimpan stabil & BUKAN signed-url
+// (bukan secret). Binary TIDAK pernah masuk Firestore (VISUAL_02/03).
+export const FORMAT_GAMBAR_DIDUKUNG: ReadonlyArray<FormatAsetVisual> = ["image/png", "image/jpeg", "image/webp"];
+export const UKURAN_MAKS_GAMBAR_BYTES = 20_000_000; // sejalan ValidasiAsetVisual
+
+export interface ObyekGambarTersimpan {
+  bytes: Uint8Array;
+  contentType: string;
+}
+
+/** Kontrak object storage image binary (durabel lintas cold-start Vercel). */
+export interface KontrakPenyimpananGambar {
+  /** Simpan binary → return URI object durable & stabil (bukan signed URL rahasia). */
+  simpan(kunci: string, obyek: ObyekGambarTersimpan): Promise<string>;
+  /** Deteksi object hilang/dangling (uri dari simpan). */
+  ada(uri: string): Promise<boolean>;
+}
+
+/** Deteksi URI durable (gs:// Firebase Storage, atau scheme fake test). */
+export function isUriDurable(uri: string): boolean {
+  return uri.startsWith("gs://") || uri.startsWith("asset://memori/");
+}
+
+/** Validasi content-type + ukuran binary image sebelum persist durable. */
+export function validasiKontenGambar(bytes: Uint8Array, contentType: string): void {
+  if (!FORMAT_GAMBAR_DIDUKUNG.includes(contentType as FormatAsetVisual)) {
+    throw new KesalahanValidasi(`Content type gambar tidak didukung: ${contentType}`);
+  }
+  if (bytes.byteLength <= 0 || bytes.byteLength > UKURAN_MAKS_GAMBAR_BYTES) {
+    throw new KesalahanValidasi(`Ukuran gambar di luar batas operasional (${bytes.byteLength} bytes).`);
+  }
+}
+
+/** Implementasi penyimpanan gambar MEMORI (fake/test; tidak durable lintas proses). */
+export class PenyimpananGambarMemori implements KontrakPenyimpananGambar {
+  private readonly gudang = new Map<string, Uint8Array>();
+  /** Simulasi kegagalan upload untuk kunci tertentu (uji "upload failure"). */
+  gagalSimpanPadaKunci?: (kunci: string) => boolean;
+
+  async simpan(kunci: string, obyek: ObyekGambarTersimpan): Promise<string> {
+    if (this.gagalSimpanPadaKunci?.(kunci)) {
+      throw new KesalahanValidasi("Simulasi kegagalan upload object storage.");
+    }
+    this.gudang.set(kunci, obyek.bytes);
+    return `asset://memori/${kunci}`;
+  }
+
+  async ada(uri: string): Promise<boolean> {
+    const kunci = uri.startsWith("asset://memori/") ? uri.slice("asset://memori/".length) : null;
+    return kunci === null ? false : this.gudang.has(kunci);
+  }
+
+  /** Helper test: hapus object untuk mensimulasikan object hilang (dangling ref). */
+  hapus(kunci: string): void {
+    this.gudang.delete(kunci);
+  }
 }
 
 export class RepositoriAsetVisualMemori implements KontrakRepositoriAsetVisual {
@@ -66,20 +127,16 @@ export class RepositoriAsetVisualMemori implements KontrakRepositoriAsetVisual {
 
   ambilKunci(plan: VisualPlan, caseId: string): string {
     // Kunci dedup berbasis identitas stabil (case + scene + plan), BUKAN daftar
-    // clue hasil parsing. Selama persist, RepositoriAsetVisualMemori.simpan
-    // merekonstruksi plan dari aset (yang requiredClues-nya hanya berisi clue
-    // yang dideklarasikan oleh provider), jadi bila kunci ikut serta
-    // mendasarkan pada requiredClues maka lookup ulang (yang memakai plan input
-    // penuh) tidak akan pernah cocok → terjadi regenerasi berulang. Menyimpan
-    // pada caseId:sceneId:planId menjamin satu aset per plan/scene di-reuse.
+    // clue hasil parsing. Menyimpan pada caseId:sceneId:planId menjamin satu
+    // aset per plan/scene di-reuse.
     return `${caseId}:${plan.sceneId}:${plan.planId}`;
   }
 
-  ambil(kunci: string): AsetVisual | null {
+  async ambil(kunci: string): Promise<AsetVisual | null> {
     return this.aset.get(kunci) ?? null;
   }
 
-  simpan(aset: AsetVisual): AsetVisual {
+  async simpan(aset: AsetVisual): Promise<AsetVisual> {
     const key = this.ambilKunci(
       {
         planId: aset.planId,
@@ -95,11 +152,11 @@ export class RepositoriAsetVisualMemori implements KontrakRepositoriAsetVisual {
     return aset;
   }
 
-  ambilManifest(caseId: string): ManifestAsetVisual | null {
+  async ambilManifest(caseId: string): Promise<ManifestAsetVisual | null> {
     return this.manifest.get(caseId) ?? null;
   }
 
-  simpanManifest(manifest: ManifestAsetVisual): ManifestAsetVisual {
+  async simpanManifest(manifest: ManifestAsetVisual): Promise<ManifestAsetVisual> {
     this.manifest.set(manifest.caseId, manifest);
     return manifest;
   }
@@ -214,11 +271,21 @@ export async function hasilkanAsetGambar(
   penyedia: KontrakPenyediaGambar,
   repositori: KontrakRepositoriAsetVisual,
   providerName = "provider-default",
+  penyimpanan?: KontrakPenyimpananGambar,
 ): Promise<AsetVisual> {
   const existingKey = repositori.ambilKunci(plan, caseId);
-  const existing = repositori.ambil(existingKey);
+  const existing = await repositori.ambil(existingKey);
   if (existing) {
-    return existing;
+    // Aset durable: verifikasi object masih ada (deteksi dangling / object hilang).
+    if (penyimpanan && isUriDurable(existing.uri)) {
+      const ada = await penyimpanan.ada(existing.uri);
+      if (ada) {
+        return existing;
+      }
+      // Object hilang → lanjut generate ulang (cache hit palsu).
+    } else {
+      return existing;
+    }
   }
 
   const promptBuilder = new PembuatPromptVisual();
@@ -241,16 +308,43 @@ export async function hasilkanAsetGambar(
 
   const parsed = JSON.parse(response.output) as Record<string, unknown>;
 
+  const assetId = typeof parsed.assetId === "string" ? parsed.assetId : `ASSET-${plan.planId}`;
+  const format = (typeof parsed.format === "string" ? parsed.format : "image/png") as FormatAsetVisual;
+  let sizeBytes = typeof parsed.sizeBytes === "number" ? parsed.sizeBytes : 150000;
+
+  let uri: string;
+  const bytesBase64 = typeof parsed.bytesBase64 === "string" && parsed.bytesBase64.length > 0 ? parsed.bytesBase64 : null;
+  if (bytesBase64) {
+    // Jalur DURABLE: binary harus di-persist ke object storage; gagal = aset TIDAK dipublish.
+    if (!penyimpanan) {
+      throw new KesalahanProviderAi(
+        "Penyimpanan object storage tidak tersedia; binary image tidak dapat di-persist durable.",
+        "PROVIDER_UNAVAILABLE",
+      );
+    }
+    const bytes = new Uint8Array(Buffer.from(bytesBase64, "base64"));
+    const contentType = typeof parsed.contentType === "string" && parsed.contentType.length > 0 ? parsed.contentType : format;
+    validasiKontenGambar(bytes, contentType);
+    sizeBytes = bytes.byteLength;
+    uri = await penyimpanan.simpan(existingKey, { bytes, contentType });
+  } else {
+    // Jalur metadata-only (provider non-durable/fake): pakai uri dari output.
+    uri = typeof parsed.uri === "string" && parsed.uri.length > 0 ? parsed.uri : `https://example.test/${plan.planId}.png`;
+    if (isUriDurable(uri)) {
+      throw new KesalahanValidasi("uri output tampak durable padahal tidak menyertakan binary image.");
+    }
+  }
+
   const asset: AsetVisual = {
-    assetId: typeof parsed.assetId === "string" ? parsed.assetId : `ASSET-${plan.planId}`,
+    assetId,
     planId: plan.planId,
     sceneId: plan.sceneId,
     caseId,
     provider: providerName,
-    uri: typeof parsed.uri === "string" ? parsed.uri : `https://example.test/${plan.planId}.png`,
+    uri,
     status: (typeof parsed.status === "string" && parsed.status === "NEEDS_REVIEW") ? "NEEDS_REVIEW" : "READY",
-    format: (typeof parsed.format === "string" ? parsed.format : "image/png") as FormatAsetVisual,
-    sizeBytes: typeof parsed.sizeBytes === "number" ? parsed.sizeBytes : 150000,
+    format,
+    sizeBytes,
     requiredClues: Array.isArray(parsed.requiredClues) ? parsed.requiredClues.filter((item): item is string => typeof item === "string") : plan.requiredClues.map((item) => item.id),
     forbiddenClues: Array.isArray(parsed.forbiddenClues) ? parsed.forbiddenClues.filter((item): item is string => typeof item === "string") : plan.forbiddenClues.map((item) => item.id),
     verifyNotes: Array.isArray(parsed.verifyNotes) ? parsed.verifyNotes.filter((item): item is string => typeof item === "string") : ["Metadata clue present; no automated vision validation available."],
@@ -264,7 +358,7 @@ export async function hasilkanAsetGambar(
   }
 
   validator.validasiAset(asset);
-  repositori.simpan(asset);
+  await repositori.simpan(asset);
 
   return asset;
 }
@@ -279,13 +373,13 @@ export function buatManifestAsetVisual(caseId: string, aset: AsetVisual[]): Mani
   };
 }
 
-export function simpanReferensiAset(
+export async function simpanReferensiAset(
   repositori: KontrakRepositoriAsetVisual,
   caseId: string,
   aset: AsetVisual,
-): ManifestAsetVisual {
-  repositori.simpan(aset);
-  const manifestLama = repositori.ambilManifest(caseId) ?? {
+): Promise<ManifestAsetVisual> {
+  await repositori.simpan(aset);
+  const manifestLama = (await repositori.ambilManifest(caseId)) ?? {
     manifestId: `manifest-${caseId}`,
     caseId,
     assets: [],
@@ -309,3 +403,5 @@ export const VISUAL_GENERATION_INVARIANTS = [
   "VISUAL_03 — only validated asset references are persistent",
   "VISUAL_04 — asset verification is explicit, not assumed",
 ] as const;
+
+export const FakeImageProvider = PenyediaGambarPalsu;

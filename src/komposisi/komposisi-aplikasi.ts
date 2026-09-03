@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+﻿import type { Firestore } from "firebase-admin/firestore";
 import { KomandoTelegramLayanan } from "../application/services/komando-telegram.js";
 import type { KonfigurasiKomandoTelegram, LoggerKomandoTelegram } from "../application/services/komando-telegram.js";
 import { ValidatorAdminGrupTelegram, ValidatorAksesTelegram, ValidatorGrupTelegram } from "../application/services/validasi-telegram.js";
@@ -18,14 +18,22 @@ import { RepositoriSnapshotResolusiFirestore } from "../infrastructure/repositor
 import { LayananInvestigasiKasus, buatLayananInvestigasiKasus } from "../application/services/investigasi-kasus.js";
 import { LayananInterogasiKasus, buatLayananInterogasiKasus } from "../application/services/interogasi-kasus.js";
 import { LayananResolusiKasus, buatLayananResolusiKasus } from "../application/services/resolusi-kasus.js";
-import { RendererNaratifDeterministik } from "../domain/services/renderer-naratif.js";
+import { RendererNaratifDeterministik, RendererNaratifAi } from "../domain/services/renderer-naratif.js";
 import { RepositoriCaseBibleStatis, type KontrakRepositoriCaseBible } from "../kasus/case-bible-repository.js";
 import { goldenCaseBible } from "../kasus/fixtures/golden-case.js";
 import { buatLoggerStruktur, LoggerStruktur } from "../observability/logger.js";
 import { PenghitungBatasKejadian } from "../security/rate-limiter.js";
+import { bacaKonfigurasiAi, type KonfigurasiAi } from "../ai/konfigurasi.js";
+import { GeminiTextProvider } from "../infrastructure/adapters/ai/gemini-text.js";
+import { GeminiImageProvider } from "../infrastructure/adapters/ai/gemini-image.js";
+import type { PintuAi } from "../ai/contracts.js";
+import type { KontrakPenyediaGambar, KontrakPenyimpananGambar } from "../ai/visual-pipeline.js";
+import { RepositoriAsetVisualFirestore } from "../infrastructure/repositories/firestore/repositori-aset-visual.js";
+import { LayananProduksiKasus } from "../application/services/layanan-produksi-kasus.js";
+import { PenyimpananGambarFirebase } from "../infrastructure/adapters/storage/penyimpanan-gambar-firebase.js";
 
 /**
- * COMPOSITION ROOT — Production Wiring Patch.
+ * COMPOSITION ROOT â€” Production Wiring Patch.
  *
  * Satu-satunya tempat dependency runtime dirakit. `api/telegram.ts` hanya
  * memanggil `dapatkanKomposisiAplikasi()`; tidak ada inline stub di handler.
@@ -46,6 +54,11 @@ export interface OpsiKomposisiAplikasi {
   waktu?: PenyediaWaktu;
   logger?: LoggerStruktur;
   batasRate?: { maxPermintaan: number; jendelaMs: number };
+  /** AI integration v1 â€” injeksi untuk test / penyedia kustom. */
+  konfigurasiAi?: KonfigurasiAi;
+  penyediaTeks?: PintuAi | undefined;
+  penyediaGambar?: KontrakPenyediaGambar | undefined;
+  penyimpananGambar?: KontrakPenyimpananGambar | undefined;
 }
 
 export interface KomposisiAplikasi {
@@ -70,13 +83,20 @@ export interface KomposisiAplikasi {
   readonly layananInterogasi: LayananInterogasiKasus;
   readonly layananResolusi: LayananResolusiKasus;
   readonly layananKomando: KomandoTelegramLayanan;
+  // AI integration v1
+  readonly konfigurasiAi: KonfigurasiAi;
+  readonly penyediaTeks?: PintuAi | undefined;
+  readonly penyediaGambar?: KontrakPenyediaGambar | undefined;
+  readonly penyimpananGambar?: KontrakPenyimpananGambar | undefined;
+  readonly repositoriAsetVisual: RepositoriAsetVisualFirestore;
+  readonly layananProduksiKasus: LayananProduksiKasus;
 }
 
 export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): KomposisiAplikasi {
   const logger = opsi.logger ?? buatLoggerStruktur(process.env.LOG_LEVEL === "debug" ? "debug" : "info");
   const waktu = opsi.waktu ?? new SistemWaktu();
 
-  // Firebase/Firestore — credential eksplisit dari env (Vercel) atau ADC.
+  // Firebase/Firestore â€” credential eksplisit dari env (Vercel) atau ADC.
   const firestore = opsi.firestore ?? buatBootstrapFirestore().firestore;
 
   // Repositori Firestore (collection naming sesuai persistence contract).
@@ -93,16 +113,62 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
 
   // Case Bible. Default produksi: Golden Case fixture yang di-remap agar ref
   // cocok dengan konvensi `case-bible:{caseId}:golden` yang dipakai domain
-  // services (caseId "CASE-001" → ref "case-bible:CASE-001:golden").
+  // services (caseId "CASE-001" â†’ ref "case-bible:CASE-001:golden").
   const repositoriCaseBible = opsi.repositoriCaseBible ?? new RepositoriCaseBibleStatis([
     { ...goldenCaseBible, caseBibleRef: `case-bible:${String(goldenCaseBible.caseId)}:golden` },
   ]);
-  const rendererNaratif = new RendererNaratifDeterministik();
+  // ===== AI integration v1 (admin/offline; runtime narrative DISABLED default) =====
+  // Provider & model TIDAK pernah di-hardcode di domain; seluruhnya dari config/env.
+  const konfigurasiAi = opsi.konfigurasiAi ?? bacaKonfigurasiAi(process.env);
+  const penyediaTeks = opsi.penyediaTeks ?? (
+    konfigurasiAi.textReady
+      ? (() => {
+          const opsiTeks: { apiKey: string; model: string; timeoutMs: number; maxRetries: number; maxOutputTokens: number; apiBase?: string } = {
+            apiKey: konfigurasiAi.geminiApiKey as string,
+            model: konfigurasiAi.textModel,
+            timeoutMs: konfigurasiAi.timeoutMs,
+            maxRetries: konfigurasiAi.maxRetries,
+            maxOutputTokens: konfigurasiAi.maxOutputTokens,
+          };
+          if (process.env.GEMINI_API_BASE) opsiTeks.apiBase = process.env.GEMINI_API_BASE;
+          return new GeminiTextProvider(opsiTeks);
+        })()
+      : undefined
+  );
+  const penyediaGambar = opsi.penyediaGambar ?? (
+    konfigurasiAi.imageReady
+      ? (() => {
+          const opsiGambar: { apiKey: string; model: string; timeoutMs: number; maxRetries: number; maxOutputTokens: number; apiBase?: string } = {
+            apiKey: konfigurasiAi.geminiApiKey as string,
+            model: konfigurasiAi.imageModel,
+            timeoutMs: konfigurasiAi.timeoutMs,
+            maxRetries: konfigurasiAi.maxRetries,
+            maxOutputTokens: konfigurasiAi.maxOutputTokens,
+          };
+          if (process.env.GEMINI_API_BASE) opsiGambar.apiBase = process.env.GEMINI_API_BASE;
+          return new GeminiImageProvider(opsiGambar);
+        })()
+      : undefined
+  );
+
+  // Runtime narrative: production default deterministik. Boundary: bila AI
+  // runtime narrative diaktifkan (false default) + provider tersedia, pakai
+  // RendererNaratifAi (fallback deterministik) â€” domain tidak tahu provider.
+  const rendererNaratif = (konfigurasiAi.runtimeNarrativeEnabled && penyediaTeks)
+    ? new RendererNaratifAi(penyediaTeks, new RendererNaratifDeterministik())
+    : new RendererNaratifDeterministik();
+
+  // Asset visual DURABLE (metadata/ref, bukan binary) â€” reused lintas replay.
+  const repositoriAsetVisual = new RepositoriAsetVisualFirestore(firestore);
+
+  // Object storage binary image durable (Firebase Storage). Lazy — hanya dipakai
+  // ketika image generation AI aktif; test dapat menyuntik fake storage.
+  const penyimpananGambar = opsi.penyimpananGambar ?? (konfigurasiAi.imageReady ? new PenyimpananGambarFirebase() : undefined);
 
   // Telegram sender/adapter (sendMessage + getChatMember).
   const pengirimTelegram = new TelegramAdapter(opsi.pengirimTelegram ?? {});
 
-  // Validasi grup/akses/admin — bukan lagi return true.
+  // Validasi grup/akses/admin â€” bukan lagi return true.
   const validatorGrupTelegram = new ValidatorGrupTelegram(repositoriGrup, waktu);
   const validatorAksesTelegram = new ValidatorAksesTelegram(pengirimTelegram);
   const validatorAdminGrupTelegram = new ValidatorAdminGrupTelegram(pengirimTelegram);
@@ -135,6 +201,25 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     repositoriSnapshot: repositoriSnapshotResolusi,
     penerbitEventDomain,
     waktu,
+  });
+
+  const layananProduksiKasus = new LayananProduksiKasus({
+    konfigurasi: {
+      caseGenerationEnabled: konfigurasiAi.caseGenerationEnabled,
+      penyediaTeks,
+      penyediaGambar,
+      penyimpananGambar,
+      providerName: konfigurasiAi.provider,
+      opsiGenerasi: {
+        maxRetries: konfigurasiAi.maxRetries,
+        provider: konfigurasiAi.provider,
+        model: konfigurasiAi.textModel,
+      },
+    },
+    repositoriVersi: {
+      simpanVersiKasus: (versi) => repositoriVersiKasus.simpanVersiKasus(versi),
+    },
+    repositoriAset: repositoriAsetVisual,
   });
 
   const konfigurasiLayanan: KonfigurasiKomandoTelegram = {
@@ -182,12 +267,18 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     layananInterogasi,
     layananResolusi,
     layananKomando,
+konfigurasiAi,
+    penyediaTeks,
+    penyediaGambar,
+    penyimpananGambar,
+    repositoriAsetVisual,
+    layananProduksiKasus,
   };
 }
 
 let komposisiAktif: KomposisiAplikasi | undefined;
 
-/** Lazy memoized composition — dipakai ulang pada warm invocation. */
+/** Lazy memoized composition â€” dipakai ulang pada warm invocation. */
 export function dapatkanKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): KomposisiAplikasi {
   if (!komposisiAktif) {
     komposisiAktif = buatKomposisiAplikasi(opsi);

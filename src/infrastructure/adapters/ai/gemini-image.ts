@@ -1,0 +1,167 @@
+import type { PermintaanAi, ResponAi } from "../../../ai/contracts.js";
+import { buatKesalahanProviderAi } from "../../../ai/errors.js";
+import type { FormatAsetVisual, KontrakPenyediaGambar } from "../../../ai/visual-pipeline.js";
+import { FORMAT_GAMBAR_DIDUKUNG, UKURAN_MAKS_GAMBAR_BYTES } from "../../../ai/visual-pipeline.js";
+import {
+  ambilImageInline,
+  backoffRetry,
+  klasifikasikanStatus,
+  panggilGemini,
+  tidur,
+} from "./gemini-net.js";
+
+export interface OpsiGeminiGambar {
+  apiKey: string;
+  model: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  maxRetries?: number;
+  maxOutputTokens?: number;
+  apiBase?: string;
+}
+
+interface KonteksVisual {
+  caseId?: string | undefined;
+  sceneId?: string | undefined;
+  planId?: string | undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatDariMime(mime: string): FormatAsetVisual | null {
+  return FORMAT_GAMBAR_DIDUKUNG.includes(mime as FormatAsetVisual) ? (mime as FormatAsetVisual) : null;
+}
+
+/**
+ * Adapter gambar Gemini (real provider) mengimplementasikan `KontrakPenyediaGambar`.
+ * Meminta image ke model Gemini, lalu mengembalikan metadata/ref terstruktur
+ * (BUKAN binary) agar `hasilkanAsetGambar` dapat membangun AsetVisual yang
+ * VALID dan DURABLE. Sesuai VISUAL_02/03: binary TIDAK masuk Firestore.
+ */
+export class GeminiImageProvider implements KontrakPenyediaGambar {
+  private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly maxOutputTokens: number;
+  private readonly apiBase: string;
+  public readonly model: string;
+
+  constructor(private readonly opsi: OpsiGeminiGambar) {
+    this.fetchImpl = opsi.fetchImpl ?? fetch;
+    this.timeoutMs = opsi.timeoutMs ?? 30_000;
+    this.maxRetries = opsi.maxRetries ?? 2;
+    this.maxOutputTokens = opsi.maxOutputTokens ?? 4000;
+    this.apiBase = opsi.apiBase ?? "https://generativelanguage.googleapis.com";
+    this.model = opsi.model;
+  }
+
+  async generateImage(request: PermintaanAi): Promise<ResponAi> {
+    const prompt = this.ambilPrompt(request);
+    const kontek = this.ambilKonteks(request);
+    const payload: Record<string, unknown> = {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: this.maxOutputTokens },
+      safetySettings: [
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+      ],
+    };
+
+    let percobaan = 0;
+    while (true) {
+      try {
+        const { status, data } = await panggilGemini({
+          apiKey: this.opsi.apiKey,
+          model: this.opsi.model,
+          endpointPath: "generateContent",
+          payload,
+          fetchImpl: this.fetchImpl,
+          timeoutMs: this.timeoutMs,
+          apiBase: this.apiBase,
+        });
+
+        if (status < 200 || status >= 300) {
+          const kategori = klasifikasikanStatus(status) ?? "PROVIDER_UNAVAILABLE";
+          const err = buatKesalahanProviderAi(kategori, `Gemini image HTTP ${status}.`, status);
+          if (kategori === "TIMEOUT" || kategori === "PROVIDER_UNAVAILABLE") {
+            if (percobaan < this.maxRetries) {
+              await tidur(backoffRetry(percobaan));
+              percobaan += 1;
+              continue;
+            }
+          }
+          throw err;
+        }
+
+        const inline = ambilImageInline(data);
+        if (!inline) {
+          throw buatKesalahanProviderAi("UNSAFE_RESPONSE", "Gemini image tidak mengembalikan data gambar.");
+        }
+
+        // Validasi content-type + ukuran SEBELUM dipersist durable (VISUAL_02/03).
+        const format = formatDariMime(inline.mimeType);
+        if (!format) {
+          throw buatKesalahanProviderAi("UNSAFE_RESPONSE", `Content type gambar tidak didukung: ${inline.mimeType}.`, inline.mimeType);
+        }
+        const bytes = new Uint8Array(Buffer.from(inline.data, "base64"));
+        if (bytes.byteLength <= 0 || bytes.byteLength > UKURAN_MAKS_GAMBAR_BYTES) {
+          throw buatKesalahanProviderAi("UNSAFE_RESPONSE", `Ukuran image di luar batas operasional (${bytes.byteLength} bytes).`);
+        }
+
+        // Referensi durable: binary dikirim ke custom output (base64) agar
+        // `hasilkanAsetGambar` mem-persist ke object storage; Firestore tetap
+        // hanya metadata/ref, BUKAN binary.
+        const sizeBytes = bytes.byteLength;
+        const uri = `asset://gemini/${this.opsi.model}/${kontek.caseId ?? "-"}/${kontek.sceneId ?? "-"}/${kontek.planId ?? "-"}`;
+
+        return {
+          output: JSON.stringify({
+            assetId: kontek.planId ? `ASSET-${kontek.planId}` : undefined,
+            uri,
+            status: "NEEDS_REVIEW",
+            format,
+            contentType: format,
+            sizeBytes,
+            bytesBase64: inline.data,
+            verifyNotes: ["Image generated by Gemini; clue verification pending human review."],
+          }),
+          warnings: [],
+        };
+      } catch (error) {
+        if (this.layakRetry(error) && percobaan < this.maxRetries) {
+          await tidur(backoffRetry(percobaan));
+          percobaan += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private ambilPrompt(request: PermintaanAi): string {
+    const ctx = request.context ?? {};
+    if (isRecord(ctx) && typeof ctx.prompt === "string" && ctx.prompt.trim().length > 0) {
+      return ctx.prompt;
+    }
+    return `Generate a mystery illustration.\nKontek:\n${JSON.stringify(ctx)}`;
+  }
+
+  private ambilKonteks(request: PermintaanAi): KonteksVisual {
+    const ctx = request.context ?? {};
+    if (!isRecord(ctx)) return {};
+    const plan = isRecord(ctx.plan) ? ctx.plan : {};
+    return {
+      caseId: typeof ctx.caseId === "string" ? ctx.caseId : undefined,
+      sceneId: typeof ctx.sceneId === "string" ? ctx.sceneId : typeof plan.sceneId === "string" ? plan.sceneId : undefined,
+      planId: typeof plan.planId === "string" ? plan.planId : undefined,
+    };
+  }
+
+  private layakRetry(error: unknown): boolean {
+    return error instanceof Error &&
+      "kategori" in error &&
+      (error as { kategori?: string }).kategori !== undefined &&
+      ["TIMEOUT", "PROVIDER_UNAVAILABLE"].includes(String((error as { kategori?: string }).kategori));
+  }
+}

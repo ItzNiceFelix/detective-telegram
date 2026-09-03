@@ -39,7 +39,7 @@ test("valid image generation creates asset and manifest reference", async () => 
   const repositori = new RepositoriAsetVisualMemori();
 
   const aset = await hasilkanAsetGambar("CASE-100", visualPlan, provider, repositori, "fake-provider");
-  const manifest = simpanReferensiAset(repositori, "CASE-100", aset);
+  const manifest = await simpanReferensiAset(repositori, "CASE-100", aset);
 
   assert.equal(aset.status, "READY");
   assert.equal(aset.uri.startsWith("https://"), true);
