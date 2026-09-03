@@ -157,6 +157,14 @@ async function handlerInternal(request: PermintaanHttpAdmin = {}, komposisi?: Ko
         catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, reason: "incomplete_asset_manifest" });
         return { status: 422, body: JSON.stringify({ ok: false, error: "Case assets belum lengkap — generate image assets durable dahulu sebelum publish." }) };
       }
+      // ASSET-STORAGE-DECISION: reference wajib ada & terverifikasi (bukan UNAVAILABLE/SUSPECT).
+      const asetTakValid = manifest.assets.find(
+        (aset) => (!aset.uri || aset.uri.trim() === "") || aset.status === "UNAVAILABLE",
+      );
+      if (asetTakValid) {
+        catatAuditAdmin(adminId, action, "rejected", { caseId: caseIdStr, versionId: versionIdStr, reason: "invalid_asset_reference", assetId: asetTakValid.assetId });
+        return { status: 422, body: JSON.stringify({ ok: false, error: "Terdapat asset tanpa reference valid/UNAVAILABLE — tidak dapat dipublish." }) };
+      }
     }
     try {
       const versiTerbit = publikasiVersiKasus(versi, waktuSekarang);

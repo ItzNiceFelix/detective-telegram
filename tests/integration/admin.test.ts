@@ -138,6 +138,33 @@ test("BLOCKER 4 — publishCase: kandidat AI tanpa asset durable → 422; dengan
   const body = JSON.parse(denganAsset.body) as { published: { status: string } };
   assert.equal(body.published.status, "PUBLISHED");
 });
+test("BLOCKER 4 — publishCase: kandidat AI duplikat (idempotent) & asset UNAVAILABLE → 422", async () => {
+  const { komposisi } = buatKomposisiUji({});
+
+  // Duplikat publish → idempotent 200.
+  const draftAi: VersiKasus = {
+    ...buatDraft("CASE-AI2", "V1"),
+    contentSummary: "Generated case: Golden Heist — kandidat AI",
+  };
+  await komposisi.repositoriVersiKasus.simpanVersiKasus(draftAi);
+  await simpanReferensiAset(komposisi.repositoriAsetVisual, "CASE-AI2", buatAsetUji("CASE-AI2"));
+  const satu = await handlerInternal(req("publishCase", { caseId: "CASE-AI2", versionId: "V1" }), komposisi);
+  assert.equal(satu.status, 200);
+  const dua = await handlerInternal(req("publishCase", { caseId: "CASE-AI2", versionId: "V1" }), komposisi);
+  assert.equal(dua.status, 200);
+
+  // Asset status UNAVAILABLE (runtime send failure) → publish DITOLAK.
+  const draftB: VersiKasus = {
+    ...buatDraft("CASE-AI3", "V1"),
+    contentSummary: "Generated case: Golden Heist — kandidat AI",
+  };
+  await komposisi.repositoriVersiKasus.simpanVersiKasus(draftB);
+  const asetB = buatAsetUji("CASE-AI3");
+  asetB.status = "UNAVAILABLE";
+  await simpanReferensiAset(komposisi.repositoriAsetVisual, "CASE-AI3", asetB);
+  const resB = await handlerInternal(req("publishCase", { caseId: "CASE-AI3", versionId: "V1" }), komposisi);
+  assert.equal(resB.status, 422);
+});
 test("BLOCKER 4 — inspectSession read-only", async () => {
   const { komposisi } = buatKomposisiUji({});
   await simpanSesi(komposisi, buatSesi(StatusSesi.OPEN, { score: 7 }));

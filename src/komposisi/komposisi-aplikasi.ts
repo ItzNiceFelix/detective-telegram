@@ -31,6 +31,8 @@ import type { KontrakPenyediaGambar, KontrakPenyimpananGambar } from "../ai/visu
 import { RepositoriAsetVisualFirestore } from "../infrastructure/repositories/firestore/repositori-aset-visual.js";
 import { LayananProduksiKasus } from "../application/services/layanan-produksi-kasus.js";
 import { PenyimpananGambarFirebase } from "../infrastructure/adapters/storage/penyimpanan-gambar-firebase.js";
+import { PenyimpananAsetTelegram } from "../infrastructure/adapters/storage/penyimpanan-aset-telegram.js";
+import { KesalahanKonfigurasi } from "../fondasi/eror.js";
 
 /**
  * COMPOSITION ROOT â€” Production Wiring Patch.
@@ -90,6 +92,30 @@ export interface KomposisiAplikasi {
   readonly penyimpananGambar?: KontrakPenyimpananGambar | undefined;
   readonly repositoriAsetVisual: RepositoriAsetVisualFirestore;
   readonly layananProduksiKasus: LayananProduksiKasus;
+}
+
+/**
+ * Pilih penyimpanan gambar binary — configuration-driven (docs/ASSET-STORAGE-DECISION.md).
+ * ASSET_STORAGE_PROVIDER=TELEGRAM_BETA -> Telegram Asset Vault (BEST_EFFORT, beta).
+ * default/FIREBASE_STORAGE -> PenyimpananGambarFirebase (canonical future).
+ */
+function bangunPenyimpananGambar(
+  konfigurasiAi: KonfigurasiAi,
+  env: Record<string, string | undefined>,
+  pengirimTelegram: TelegramAdapter,
+): KontrakPenyimpananGambar | undefined {
+  if (!konfigurasiAi.imageReady) return undefined;
+  const mode = (env.ASSET_STORAGE_PROVIDER ?? "FIREBASE_STORAGE").trim().toUpperCase();
+  if (mode === "TELEGRAM_BETA" || mode === "TELEGRAM") {
+    const chatId = (env.TELEGRAM_ASSET_VAULT_CHAT_ID ?? "").trim();
+    if (!chatId) {
+      throw new KesalahanKonfigurasi(
+        "ASSET_STORAGE_PROVIDER=TELEGRAM_BETA membutuhkan TELEGRAM_ASSET_VAULT_CHAT_ID (private channel vault).",
+      );
+    }
+    return new PenyimpananAsetTelegram({ chatId, telegram: pengirimTelegram });
+  }
+  return new PenyimpananGambarFirebase();
 }
 
 export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): KomposisiAplikasi {
@@ -161,12 +187,14 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   // Asset visual DURABLE (metadata/ref, bukan binary) â€” reused lintas replay.
   const repositoriAsetVisual = new RepositoriAsetVisualFirestore(firestore);
 
-  // Object storage binary image durable (Firebase Storage). Lazy — hanya dipakai
-  // ketika image generation AI aktif; test dapat menyuntik fake storage.
-  const penyimpananGambar = opsi.penyimpananGambar ?? (konfigurasiAi.imageReady ? new PenyimpananGambarFirebase() : undefined);
-
-  // Telegram sender/adapter (sendMessage + getChatMember).
+  // Telegram sender/adapter (sendMessage + getChatMember + sendPhoto).
   const pengirimTelegram = new TelegramAdapter(opsi.pengirimTelegram ?? {});
+
+  // Penyimpanan gambar (binary) — configuration-driven (ASSET-STORAGE-DECISION.md).
+  // ASSET_STORAGE_PROVIDER=TELEGRAM_BETA -> Telegram Asset Vault (BEST_EFFORT, beta).
+  // default/firebase -> PenyimpananGambarFirebase (canonical future).
+  const penyimpananGambar = opsi.penyimpananGambar ?? bangunPenyimpananGambar(konfigurasiAi, process.env, pengirimTelegram);
+
 
   // Validasi grup/akses/admin â€” bukan lagi return true.
   const validatorGrupTelegram = new ValidatorGrupTelegram(repositoriGrup, waktu);

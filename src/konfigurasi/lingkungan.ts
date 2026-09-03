@@ -17,6 +17,8 @@ export interface VariabelLingkungan {
   AI_ASSISTANT_ENABLED?: string | undefined;
   GEMINI_API_KEY?: string | undefined;
   FIREBASE_STORAGE_BUCKET?: string | undefined;
+  ASSET_STORAGE_PROVIDER?: string | undefined;
+  TELEGRAM_ASSET_VAULT_CHAT_ID?: string | undefined;
   AI_TIMEOUT_MS?: string | undefined;
   AI_MAX_RETRIES?: string | undefined;
   AI_MAX_OUTPUT_TOKENS?: string | undefined;
@@ -40,6 +42,8 @@ export function bacaVariabelLingkungan(env: Record<string, string | undefined>):
     AI_ASSISTANT_ENABLED: env.AI_ASSISTANT_ENABLED,
     GEMINI_API_KEY: env.GEMINI_API_KEY,
     FIREBASE_STORAGE_BUCKET: env.FIREBASE_STORAGE_BUCKET,
+    ASSET_STORAGE_PROVIDER: env.ASSET_STORAGE_PROVIDER,
+    TELEGRAM_ASSET_VAULT_CHAT_ID: env.TELEGRAM_ASSET_VAULT_CHAT_ID,
     AI_TIMEOUT_MS: env.AI_TIMEOUT_MS,
     AI_MAX_RETRIES: env.AI_MAX_RETRIES,
     AI_MAX_OUTPUT_TOKENS: env.AI_MAX_OUTPUT_TOKENS,

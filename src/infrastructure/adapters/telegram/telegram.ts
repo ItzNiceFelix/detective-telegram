@@ -25,6 +25,26 @@ export interface PintuTelegram {
   kirim(respon: ResponTelegram): Promise<void>;
 }
 
+/** Byte gambar yang diunggah ke vault via Bot API `sendPhoto`. */
+export interface ObyekKirimFotoTelegram {
+  bytes: Uint8Array;
+  contentType?: string;
+  filename?: string;
+}
+
+/** Hasil upload foto: `file_id` (tidak boleh dianggap durable — BEST_EFFORT). */
+export interface TagihanFotoTelegram {
+  fileId: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+}
+
+/** Dependency sempit untuk storage: capability adapter, TANPA business logic. */
+export interface PintuKirimFotoTelegram {
+  kirimFotoTelegram(chatId: string, foto: ObyekKirimFotoTelegram): Promise<TagihanFotoTelegram>;
+}
+
 /**
  * Status keanggotaan Telegram (getChatMember.result.status).
  * Dipakai oleh validator akses/admin grup — diputuskan server-side,
@@ -51,6 +71,18 @@ export interface OpsiPengirimTelegram {
 
 const TIMEOUT_DEFAULT_MS = 10_000;
 const API_BASE_DEFAULT = "https://api.telegram.org";
+
+/** Luas foto (width×height) untuk memilih resolusi tertinggi; 0 bila tidak ada. */
+function luasFoto(f: { width?: unknown; height?: unknown } | undefined): number {
+  if (!f) return 0;
+  const w = typeof f.width === "number" ? f.width : 0;
+  const h = typeof f.height === "number" ? f.height : 0;
+  return w * h;
+}
+
+function nilaiAngka(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
 
 interface ResponApiTelegram {
   ok?: unknown;
@@ -162,6 +194,51 @@ export class TelegramAdapter implements PintuTelegram {
     }
   }
 
+  /**
+   * Outbound Bot API `sendPhoto` — multipart/form-data, upload binary gambar ke
+   * vault (asset provider beta). Mengembalikan `file_id` resolusi tertinggi plus
+   * dimensi/ukuran. Token hanya ada di URL; tidak pernah di body/error/log.
+   * Ini capability murni (bukan business logic); verifikasi/recovery domain lain.
+   */
+  async kirimFotoTelegram(chatId: string, foto: ObyekKirimFotoTelegram): Promise<TagihanFotoTelegram> {
+    if (!this.botToken) {
+      throw new KesalahanKonfigurasi("TELEGRAM_BOT_TOKEN belum dikonfigurasi.");
+    }
+    if (!foto || foto.bytes.byteLength === 0) {
+      throw new KesalahanIntegrasi("Foto kosong tidak dapat diunggah ke Telegram.");
+    }
+
+    const jenis = (foto.contentType ?? "image/png").trim() || "image/png";
+    const formData = new FormData();
+    formData.set("chat_id", chatId);
+    formData.set("photo", new Blob([new Uint8Array(foto.bytes)], { type: jenis }), foto.filename ?? "asset.png");
+
+    // fetch menentukan boundary multipart sendiri; konten-type TIDAK diset manual.
+    const data = (await this.panggilApiTelegramMultipart("sendPhoto", formData)) as ResponApiTelegram;
+    const result = data.result as
+      | { photo?: Array<{ file_id?: unknown; width?: unknown; height?: unknown; file_size?: unknown }> }
+      | undefined;
+    const photo = Array.isArray(result?.photo) ? result.photo : [];
+
+    let tertinggi = photo[0];
+    for (const p of photo) {
+      if (luasFoto(p) > luasFoto(tertinggi)) tertinggi = p;
+    }
+    const fileId = typeof tertinggi?.file_id === "string" ? tertinggi.file_id : "";
+    if (!fileId) {
+      throw new KesalahanIntegrasi("Telegram API sendPhoto tidak mengembalikan photo.file_id.");
+    }
+
+    const lebar = nilaiAngka(tertinggi?.width);
+    const tinggi = nilaiAngka(tertinggi?.height);
+    const ukuran = nilaiAngka(tertinggi?.file_size);
+    const hasil: TagihanFotoTelegram = { fileId };
+    if (lebar !== undefined) hasil.width = lebar;
+    if (tinggi !== undefined) hasil.height = tinggi;
+    if (ukuran !== undefined) hasil.sizeBytes = ukuran;
+    return hasil;
+  }
+
   private async panggilApiTelegram(metode: string, payload: Record<string, unknown>): Promise<unknown> {
     // Token hanya ada di URL; jangan pernah dimasukkan ke pesan error/log.
     const url = `${this.apiBase}/bot${this.botToken}/${metode}`;
@@ -172,6 +249,50 @@ export class TelegramAdapter implements PintuTelegram {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new KesalahanIntegrasi(`Telegram API ${metode} timeout.`);
+      }
+      throw new KesalahanIntegrasi(
+        `Telegram API ${metode} gagal: ${error instanceof Error ? error.message : "unknown"}.`,
+      );
+    }
+
+    if (!respons.ok) {
+      throw new KesalahanIntegrasi(`Telegram API ${metode} HTTP ${respons.status}.`);
+    }
+
+    let data: unknown;
+    try {
+      data = await respons.json();
+    } catch {
+      throw new KesalahanIntegrasi(`Telegram API ${metode} respons tidak valid (bukan JSON).`);
+    }
+
+    if (data === null || typeof data !== "object" || typeof (data as ResponApiTelegram).ok !== "boolean") {
+      throw new KesalahanIntegrasi(`Telegram API ${metode} respons malformed.`);
+    }
+
+    const hasil = data as ResponApiTelegram;
+    if (hasil.ok !== true) {
+      const deskripsi = typeof hasil.description === "string" ? hasil.description : "tanpa deskripsi";
+      throw new KesalahanIntegrasi(`Telegram API ${metode} ok=false: ${deskripsi}.`);
+    }
+
+    return data;
+  }
+
+  /** Outbound Bot API multipart (sendPhoto). Disarikan dari panggilApiTelegram. */
+  private async panggilApiTelegramMultipart(metode: string, formData: FormData): Promise<unknown> {
+    const url = `${this.apiBase}/bot${this.botToken}/${metode}`;
+
+    let respons: Response;
+    try {
+      respons = await this.fetchImpl(url, {
+        method: "POST",
+        body: formData,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {

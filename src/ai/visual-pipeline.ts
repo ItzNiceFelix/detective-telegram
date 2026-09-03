@@ -3,7 +3,7 @@ import { KesalahanProviderAi } from "./errors.js";
 import type { PintuAi, PermintaanAi, ResponAi } from "./contracts.js";
 
 export type TujuanVisual = "CRIME_SCENE" | "LOCATION" | "PORTRAIT" | "EVIDENCE_CLOSEUP" | "REVEAL";
-export type StatusAsetVisual = "READY" | "NEEDS_REVIEW" | "REJECTED";
+export type StatusAsetVisual = "READY" | "NEEDS_REVIEW" | "REJECTED" | "SUSPECT" | "UNAVAILABLE";
 export type FormatAsetVisual = "image/png" | "image/jpeg" | "image/webp";
 
 export interface KebutuhanVisual {
@@ -39,6 +39,16 @@ export interface AsetVisual {
   forbiddenClues: string[];
   verifyNotes?: string[];
   createdAt: string;
+  /** Identitas penyimpanan (storage provider) — BEDA dari `provider` (provider gambar). */
+  storageProvider?: string;
+  /** Kelas durability referensi: Telegram beta = BEST_EFFORT; GCS = DURABLE. */
+  durability?: "DURABLE" | "BEST_EFFORT";
+  /** Waktu referensi diverifikasi pada creation/publish. */
+  verifiedAt?: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  updatedAt?: string;
 }
 
 export interface ManifestAsetVisual {
@@ -79,6 +89,35 @@ export interface KontrakPenyimpananGambar {
   simpan(kunci: string, obyek: ObyekGambarTersimpan): Promise<string>;
   /** Deteksi object hilang/dangling (uri dari simpan). */
   ada(uri: string): Promise<boolean>;
+}
+
+/**
+ * Ekstensi OPTIONAL dari KontrakPenyimpananGambar untuk penyimpanan yang dapat
+ * melaporkan metadata terperinci (storageProvider, durability, verifiedAt,
+ * dimensi). Tetap memenuhi kontrak dasar; domain memakai duck-typing lewat
+ * `isPenyimpananGambarTerperinci` sehingga TIDAK mengenal Telegram/Firebase.
+ */
+export interface HasilSimpanGambarTerperinci {
+  /** Referensi yang disimpan (mis. file_id Telegram, atau gs:// untuk GCS). */
+  reference: string;
+  storageProvider: string;
+  durability: "DURABLE" | "BEST_EFFORT";
+  /** Waktu simpan/verifikasi — menjadi `verifiedAt`/`updatedAt`. */
+  createdAt: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+}
+
+export interface PenyimpananGambarTerperinci extends KontrakPenyimpananGambar {
+  readonly storageProvider: string;
+  readonly durability: "DURABLE" | "BEST_EFFORT";
+  simpanTerperinci(kunci: string, obyek: ObyekGambarTersimpan): Promise<HasilSimpanGambarTerperinci>;
+}
+
+export function isPenyimpananGambarTerperinci(v: KontrakPenyimpananGambar): v is PenyimpananGambarTerperinci {
+  return typeof (v as PenyimpananGambarTerperinci).simpanTerperinci === "function";
 }
 
 /** Deteksi URI durable (gs:// Firebase Storage, atau scheme fake test). */
@@ -313,6 +352,7 @@ export async function hasilkanAsetGambar(
   let sizeBytes = typeof parsed.sizeBytes === "number" ? parsed.sizeBytes : 150000;
 
   let uri: string;
+  let detailPenyimpanan: HasilSimpanGambarTerperinci | undefined;
   const bytesBase64 = typeof parsed.bytesBase64 === "string" && parsed.bytesBase64.length > 0 ? parsed.bytesBase64 : null;
   if (bytesBase64) {
     // Jalur DURABLE: binary harus di-persist ke object storage; gagal = aset TIDAK dipublish.
@@ -326,7 +366,12 @@ export async function hasilkanAsetGambar(
     const contentType = typeof parsed.contentType === "string" && parsed.contentType.length > 0 ? parsed.contentType : format;
     validasiKontenGambar(bytes, contentType);
     sizeBytes = bytes.byteLength;
-    uri = await penyimpanan.simpan(existingKey, { bytes, contentType });
+    if (isPenyimpananGambarTerperinci(penyimpanan)) {
+      detailPenyimpanan = await penyimpanan.simpanTerperinci(existingKey, { bytes, contentType });
+      uri = detailPenyimpanan.reference;
+    } else {
+      uri = await penyimpanan.simpan(existingKey, { bytes, contentType });
+    }
   } else {
     // Jalur metadata-only (provider non-durable/fake): pakai uri dari output.
     uri = typeof parsed.uri === "string" && parsed.uri.length > 0 ? parsed.uri : `https://example.test/${plan.planId}.png`;
@@ -350,6 +395,20 @@ export async function hasilkanAsetGambar(
     verifyNotes: Array.isArray(parsed.verifyNotes) ? parsed.verifyNotes.filter((item): item is string => typeof item === "string") : ["Metadata clue present; no automated vision validation available."],
     createdAt: new Date().toISOString(),
   };
+
+  // Enrich metadata penyimpanan (storageProvider + durability BEST_EFFORT/DURABLE +
+  // verifiedAt + dimensi) bila storage mengimplementasi PenyimpananGambarTerperinci.
+  // Domain tidak pernah mengenal "Telegram" / "Firebase" secara eksplisit di sini.
+  if (detailPenyimpanan) {
+    asset.storageProvider = detailPenyimpanan.storageProvider;
+    asset.durability = detailPenyimpanan.durability;
+    asset.verifiedAt = detailPenyimpanan.createdAt;
+    asset.updatedAt = detailPenyimpanan.createdAt;
+    asset.mimeType = detailPenyimpanan.mimeType ?? asset.format;
+    if (detailPenyimpanan.width !== undefined) asset.width = detailPenyimpanan.width;
+    if (detailPenyimpanan.height !== undefined) asset.height = detailPenyimpanan.height;
+    if (detailPenyimpanan.sizeBytes !== undefined) asset.sizeBytes = detailPenyimpanan.sizeBytes;
+  }
 
   const validator = new ValidasiAsetVisual();
   if (asset.requiredClues.length === 0) {

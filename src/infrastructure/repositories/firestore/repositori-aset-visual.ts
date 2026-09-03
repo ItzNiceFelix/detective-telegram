@@ -2,6 +2,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import type {
   AsetVisual,
   ManifestAsetVisual,
+  StatusAsetVisual,
   VisualPlan,
 } from "../../../ai/visual-pipeline.js";
 import type { KontrakRepositoriAsetVisual } from "../../../ai/visual-pipeline.js";
@@ -76,20 +77,33 @@ export class RepositoriAsetVisualFirestore implements KontrakRepositoriAsetVisua
       forbiddenClues: aset.forbiddenClues,
       verifyNotes: aset.verifyNotes ?? [],
       createdAt: aset.createdAt,
+      ...(aset.storageProvider !== undefined ? { storageProvider: aset.storageProvider } : {}),
+      ...(aset.durability !== undefined ? { durability: aset.durability } : {}),
+      ...(aset.verifiedAt !== undefined ? { verifiedAt: aset.verifiedAt } : {}),
+      ...(aset.mimeType !== undefined ? { mimeType: aset.mimeType } : {}),
+      ...(aset.width !== undefined ? { width: aset.width } : {}),
+      ...(aset.height !== undefined ? { height: aset.height } : {}),
+      ...(aset.updatedAt !== undefined ? { updatedAt: aset.updatedAt } : {}),
     };
   }
 
   private deserializeAset(d: Record<string, unknown>): AsetVisual {
     const str = (v: unknown): string => (typeof v === "string" ? v : "");
     const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-    return {
+    const optStr = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+    const statusRaw = typeof d.status === "string" ? d.status : "";
+    const stat: StatusAsetVisual =
+      statusRaw === "NEEDS_REVIEW" || statusRaw === "REJECTED" || statusRaw === "SUSPECT" || statusRaw === "UNAVAILABLE"
+        ? statusRaw
+        : "READY";
+    const hasil: AsetVisual = {
       assetId: str(d.assetId),
       planId: str(d.planId),
       sceneId: str(d.sceneId),
       caseId: str(d.caseId),
       provider: str(d.provider),
       uri: str(d.uri),
-      status: d.status === "NEEDS_REVIEW" || d.status === "REJECTED" ? d.status : "READY",
+      status: stat,
       format: d.format === "image/jpeg" || d.format === "image/webp" ? d.format : "image/png",
       sizeBytes: typeof d.sizeBytes === "number" ? d.sizeBytes : 0,
       requiredClues: strArr(d.requiredClues),
@@ -97,6 +111,18 @@ export class RepositoriAsetVisualFirestore implements KontrakRepositoriAsetVisua
       verifyNotes: strArr(d.verifyNotes),
       createdAt: str(d.createdAt),
     };
+    const storageProvider = optStr(d.storageProvider);
+    if (storageProvider) hasil.storageProvider = storageProvider;
+    if (d.durability === "DURABLE" || d.durability === "BEST_EFFORT") hasil.durability = d.durability;
+    const verifiedAt = optStr(d.verifiedAt);
+    if (verifiedAt) hasil.verifiedAt = verifiedAt;
+    const mimeType = optStr(d.mimeType);
+    if (mimeType) hasil.mimeType = mimeType;
+    if (typeof d.width === "number" && Number.isFinite(d.width)) hasil.width = d.width;
+    if (typeof d.height === "number" && Number.isFinite(d.height)) hasil.height = d.height;
+    const updatedAt = optStr(d.updatedAt);
+    if (updatedAt) hasil.updatedAt = updatedAt;
+    return hasil;
   }
 
   private serializeManifest(m: ManifestAsetVisual): Record<string, unknown> {
