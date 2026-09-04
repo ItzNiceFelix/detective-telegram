@@ -3,17 +3,16 @@ import { buatKesalahanProviderAi } from "../../../ai/errors.js";
 import type { CatatanTelemetriAi, PenerimaTelemetriAi } from "./telemetri-ai.js";
 import { petungOperasiAi } from "./telemetri-ai.js";
 import {
-  alasanBlokir,
-  ambilTeksDariRespons,
-  backoffRetry,
-  klasifikasikanStatus,
-  panggilGemini,
-  tidur,
-  uraiTotalTokens,
-  uraiUsageMetadata,
-} from "./gemini-net.js";
+  backoffRetryXkiro,
+  klasifikasikanStatusXkiro,
+  panggilXkiro,
+  tidurXkiro,
+  uraiKontenXkiro,
+  uraiTotalTokensXkiro,
+  uraiUsageXkiro,
+} from "./xkiro-net.js";
 
-export interface OpsiGeminiText {
+export interface OpsiXkiroText {
   apiKey: string;
   model: string;
   fetchImpl?: typeof fetch;
@@ -23,26 +22,21 @@ export interface OpsiGeminiText {
   /** Budget token input (dari konfigurasi runtime). Pelanggaran → INVALID_RESPONSE. */
   maxInputTokens?: number | undefined;
   apiBase?: string;
-  /**
-   * Opsional: aktifkan preflight `countTokens` untuk estimasi tokenInput
-   * bila respons generateContent TIDAK menyediakan usageMetadata (Gemini
-   * solid untuk generateContent—jarang kosong). Eksekusi preflight disengaja
-   * gagal-aman: tidak pernah menggagalkan permintaan generate induknya.
-   */
+  /** Preflight count opsional (default false; aktif otomatis bila maxInputTokens diset). */
   countTokensEnabled?: boolean;
   /** Penerima telemetri per-percobaan (opsional; lihat telemetri-ai.ts). */
   telemetri?: PenerimaTelemetriAi;
 }
 
 /**
- * Adapter teks Gemini (real provider) mengimplementasikan `PintuAi`.
- * - structured/output JSON untuk `case_generation`;
- * - bounded output & bounded retry;
+ * Adapter teks xKiro (OpenAI-compatible chat completions) mengimplementasikan `PintuAi`.
+ * - non-streaming chat completion; JSON diminta via prompt untuk `case_generation`;
+ * - bounded output & bounded retry (hanya TIMEOUT/PROVIDER_UNAVAILABLE);
  * - timeout memakai AbortSignal;
  * - error dipetakan ke `KesalahanProviderAi` (kategori terstruktur);
  * - TIDAK memanggil provider dari CaseVersion/Game Engine — hanya aplikasi/admin.
  */
-export class GeminiTextProvider implements PintuAi {
+export class XkiroTextProvider implements PintuAi {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -51,42 +45,33 @@ export class GeminiTextProvider implements PintuAi {
   private readonly apiBase: string;
   private readonly countTokensEnabled: boolean;
 
-  constructor(private readonly opsi: OpsiGeminiText) {
+  constructor(private readonly opsi: OpsiXkiroText) {
     this.fetchImpl = opsi.fetchImpl ?? fetch;
     this.timeoutMs = opsi.timeoutMs ?? 15_000;
     this.maxRetries = opsi.maxRetries ?? 2;
     this.maxOutputTokens = opsi.maxOutputTokens ?? 2400;
     this.maxInputTokens = opsi.maxInputTokens;
-    this.apiBase = opsi.apiBase ?? "https://generativelanguage.googleapis.com";
+    this.apiBase = opsi.apiBase ?? "https://api.xkiro.com/v1";
     this.countTokensEnabled = opsi.countTokensEnabled ?? false;
   }
 
   async generateText(request: PermintaanAi): Promise<ResponAi> {
+    if (!this.opsi.model || this.opsi.model.trim().length === 0) {
+      throw buatKesalahanProviderAi("MODEL_NOT_FOUND", "Model xKiro tidak dikonfigurasi.");
+    }
     const maxOutput = Math.min(request.maxTokens ?? this.maxOutputTokens, this.maxOutputTokens);
     const prompt = this.bangunPrompt(request);
     const payload: Record<string, unknown> = {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        maxOutputTokens: Math.min(maxOutput, this.maxOutputTokens),
-        responseMimeType: this.promptTypeStructured(request.promptType) ? "application/json" : "text/plain",
-        temperature: 0.4,
-      },
-      safetySettings: [
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
-      ],
+      model: this.opsi.model,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: maxOutput,
+      temperature: 0.4,
+      stream: false,
     };
 
-    // Prioritas 2: countTokens preflight — opsional & gagal-aman. Tidak pernah
-    // menambah panggilan generate; endpoint terpisah & murah.
-    // Aktif juga bila `maxInputTokens` diset (untuk menghormati token budget
-    // input) — tetap gagal-aman, tidak menggagalkan generate.
-    const preflightTokenInput = await this.preflightCountTokens(payload);
+    // Preflight count_tokens — opsional & gagal-aman; aktif otomatis bila
+    // maxInputTokens dikonfigurasi (untuk menghormati token budget input).
+    const preflightTokenInput = await this.preflightCountTokens(prompt);
     if (this.maxInputTokens !== undefined && preflightTokenInput !== undefined && preflightTokenInput > this.maxInputTokens) {
       throw buatKesalahanProviderAi(
         "INVALID_RESPONSE",
@@ -98,10 +83,9 @@ export class GeminiTextProvider implements PintuAi {
     let percobaan = 0;
     while (true) {
       try {
-        const { status, data } = await panggilGemini({
+        const { status, data } = await panggilXkiro({
           apiKey: this.opsi.apiKey,
-          model: this.opsi.model,
-          endpointPath: "generateContent",
+          endpointPath: "chat/completions",
           payload,
           fetchImpl: this.fetchImpl,
           timeoutMs: this.timeoutMs,
@@ -109,11 +93,11 @@ export class GeminiTextProvider implements PintuAi {
         });
 
         if (status < 200 || status >= 300) {
-          const kategori = klasifikasikanStatus(status) ?? "PROVIDER_UNAVAILABLE";
-          const err = buatKesalahanProviderAi(kategori, `Gemini HTTP ${status}.`, status);
+          const kategori = klasifikasikanStatusXkiro(status) ?? "PROVIDER_UNAVAILABLE";
+          const err = buatKesalahanProviderAi(kategori, `xKiro HTTP ${status}.`, status);
           if (kategori === "TIMEOUT" || kategori === "PROVIDER_UNAVAILABLE") {
             if (percobaan < this.maxRetries) {
-              await tidur(backoffRetry(percobaan));
+              await tidurXkiro(backoffRetryXkiro(percobaan));
               percobaan += 1;
               continue;
             }
@@ -122,20 +106,19 @@ export class GeminiTextProvider implements PintuAi {
           throw err;
         }
 
-        const teks = ambilTeksDariRespons(data);
+        const teks = uraiKontenXkiro(data);
         if (teks === null) {
-          const blokir = alasanBlokir(data) ?? "kandidat kosong";
-          this.emitTelemetri(request.promptType, mulai, percobaan + 1, status, uraiUsageMetadata(data));
-          throw buatKesalahanProviderAi("UNSAFE_RESPONSE", `Gemini memblokir/merespons kosong (${blokir}).`, blokir);
+          this.emitTelemetri(request.promptType, mulai, percobaan + 1, status, uraiUsageXkiro(data));
+          throw buatKesalahanProviderAi("INVALID_RESPONSE", "xKiro mengembalikan content kosong.", status);
         }
-        if (teks.length === 0 || teks.length > this.maxOutputTokens * 6) {
-          this.emitTelemetri(request.promptType, mulai, percobaan + 1, status, uraiUsageMetadata(data));
-          throw buatKesalahanProviderAi("INVALID_RESPONSE", "Output Gemini di luar batas panjang yang diizinkan.");
+        if (teks.length > this.maxOutputTokens * 6) {
+          this.emitTelemetri(request.promptType, mulai, percobaan + 1, status, uraiUsageXkiro(data));
+          throw buatKesalahanProviderAi("INVALID_RESPONSE", "Output xKiro di luar batas panjang yang diizinkan.");
         }
 
-        // Prioritas 1: provider usage metadata. Fallback (hanya bila absen):
-        // estimasi tokenInput dari countTokens preflight.
-        const usage = uraiUsageMetadata(data);
+        // Sumber utama: provider usage metadata. Fallback (hanya bila absen):
+        // estimasi tokenInput dari count_tokens preflight.
+        const usage = uraiUsageXkiro(data);
         const tokenInput = usage.tokenInput ?? preflightTokenInput ?? undefined;
         const usageFinal = {
           ...usage,
@@ -147,7 +130,7 @@ export class GeminiTextProvider implements PintuAi {
         return { output: teks, warnings: [], usage: finalUsage };
       } catch (error) {
         if (this.layakRetry(error) && percobaan < this.maxRetries) {
-          await tidur(backoffRetry(percobaan));
+          await tidurXkiro(backoffRetryXkiro(percobaan));
           percobaan += 1;
           continue;
         }
@@ -165,7 +148,7 @@ export class GeminiTextProvider implements PintuAi {
     usage: Partial<CatatanTelemetriAi> | undefined,
   ): void {
     this.opsi.telemetri?.({
-      provider: "gemini",
+      provider: "xkiro",
       model: this.opsi.model,
       operation: petungOperasiAi((tipePrompt as TipePrompt) ?? "dialogue"),
       durationMs: Date.now() - mulai,
@@ -176,35 +159,32 @@ export class GeminiTextProvider implements PintuAi {
   }
 
   /**
-   * Preflight countTokens (opsional). Catch-all → null : pemanggil memilih
+   * Preflight count_tokens (opsional). Catch-all → undefined: pemanggil memilih
    * `tokenInput ?? null`. Tidak pernah melempar (gagal-aman eksekusi).
    */
-  private async preflightCountTokens(payload: Record<string, unknown>): Promise<number | undefined> {
+  private async preflightCountTokens(prompt: string): Promise<number | undefined> {
     if (!this.countTokensEnabled && this.maxInputTokens === undefined) return undefined;
     try {
-      const { status, data } = await panggilGemini({
+      const { status, data } = await panggilXkiro({
         apiKey: this.opsi.apiKey,
-        model: this.opsi.model,
-        endpointPath: "countTokens",
-        payload,
+        endpointPath: "messages/count_tokens",
+        payload: { model: this.opsi.model, messages: [{ role: "user", content: prompt }] },
         fetchImpl: this.fetchImpl,
         timeoutMs: Math.min(this.timeoutMs, 10_000),
         apiBase: this.apiBase,
       });
       if (status < 200 || status >= 300) return undefined;
-      return uraiTotalTokens(data) ?? undefined;
+      return uraiTotalTokensXkiro(data) ?? undefined;
     } catch {
       return undefined;
     }
   }
 
-  private promptTypeStructured(tipe: string): boolean {
-    return tipe === "case_generation" || tipe === "hint";
-  }
-
   private bangunPrompt(request: PermintaanAi): string {
     // Prompt generik dari kontrak; TIDAK memuat secret/Firebase/Telegram.
-    // Disarikan → client hanya melihat {promptType, context} (tanpa personal data).
+    // xKiro non-streaming chat completions: structured output diminta lewat
+    // instruksi prompt (kontrak PintuAi generik); parsing/validasi JSON tetap
+    // di domain (strict, tanpa recovery semantik).
     return [
       `Tipe permintaan: ${request.promptType}`,
       `Kontek:\n${JSON.stringify(request.context ?? {})}`,

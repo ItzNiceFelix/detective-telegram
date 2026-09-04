@@ -34,6 +34,9 @@ export interface KonfigurasiLayananProduksi {
   penyimpananGambar?: KontrakPenyimpananGambar | undefined;
   providerName: string;
   opsiGenerasi?: { maxRetries?: number; provider?: string; model?: string };
+  /** Gerbang dinamis opsional (router runtime config); dicek sebelum gate statis. */
+  gerbangKasus?: () => Promise<void>;
+  gerbangGambar?: () => Promise<void>;
 }
 
 export interface KonfigurasiServiceProduksi {
@@ -58,6 +61,9 @@ export class LayananProduksiKasus {
   constructor(private readonly cfg: KonfigurasiServiceProduksi) {}
 
   async generateCase(seed: BenihKasus, opsi: OpsiGenerasiKasus = {}): Promise<KandidatKasus> {
+    if (this.cfg.konfigurasi.gerbangKasus) {
+      await this.cfg.konfigurasi.gerbangKasus();
+    }
     if (!this.cfg.konfigurasi.caseGenerationEnabled) {
       throw buatKesalahanProviderAi("DISABLED", "AI Case Generation dinonaktifkan.");
     }
@@ -90,6 +96,9 @@ export class LayananProduksiKasus {
   }
 
   async generateImages(caseId: string, plans: VisualPlan[]): Promise<ManifestAsetVisual> {
+    if (this.cfg.konfigurasi.gerbangGambar) {
+      await this.cfg.konfigurasi.gerbangGambar();
+    }
     const penyedia = this.cfg.konfigurasi.penyediaGambar;
     const repo = this.cfg.repositoriAset;
     if (!penyedia || !repo) {

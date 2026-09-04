@@ -24,10 +24,10 @@ import { goldenCaseBible } from "../kasus/fixtures/golden-case.js";
 import { buatLoggerStruktur, LoggerStruktur } from "../observability/logger.js";
 import { PenghitungBatasKejadian } from "../security/rate-limiter.js";
 import { bacaKonfigurasiAi, type KonfigurasiAi } from "../ai/konfigurasi.js";
-import { GeminiTextProvider } from "../infrastructure/adapters/ai/gemini-text.js";
 import { GeminiImageProvider } from "../infrastructure/adapters/ai/gemini-image.js";
+import { RouterAi } from "../infrastructure/adapters/ai/router-ai.js";
+import { RepositoriKonfigurasiAiFirestore } from "../infrastructure/repositories/firestore/repositori-konfigurasi-ai.js";
 import type { PintuAi } from "../ai/contracts.js";
-import { buatPenerimaTelemetriAi } from "../infrastructure/adapters/ai/telemetri-ai.js";
 import type { KontrakPenyediaGambar, KontrakPenyimpananGambar } from "../ai/visual-pipeline.js";
 import { RepositoriAsetVisualFirestore } from "../infrastructure/repositories/firestore/repositori-aset-visual.js";
 import { LayananProduksiKasus } from "../application/services/layanan-produksi-kasus.js";
@@ -64,6 +64,7 @@ export interface OpsiKomposisiAplikasi {
   penyediaTeks?: PintuAi | undefined;
   penyediaGambar?: KontrakPenyediaGambar | undefined;
   penyimpananGambar?: KontrakPenyimpananGambar | undefined;
+  routerTtlMs?: number;
   /** Chat vault asset (test overrides). Default: env TELEGRAM_ASSET_VAULT_CHAT_ID. */
   vaultChatId?: string | undefined;
   /** Validasi admin vault (test overrides). Default: getChatMember creator/admin. */
@@ -92,8 +93,10 @@ export interface KomposisiAplikasi {
   readonly layananInterogasi: LayananInterogasiKasus;
   readonly layananResolusi: LayananResolusiKasus;
   readonly layananKomando: KomandoTelegramLayanan;
-  // AI integration v1
+  // AI integration v1 + runtime routing (Firestore)
   readonly konfigurasiAi: KonfigurasiAi;
+  readonly routerAi: RouterAi;
+  readonly repositoriKonfigurasiAi: RepositoriKonfigurasiAiFirestore;
   readonly penyediaTeks?: PintuAi | undefined;
   readonly penyediaGambar?: KontrakPenyediaGambar | undefined;
   readonly penyimpananGambar?: KontrakPenyimpananGambar | undefined;
@@ -162,26 +165,38 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const repositoriCaseBible = opsi.repositoriCaseBible ?? new RepositoriCaseBibleStatis([
     { ...goldenCaseBible, caseBibleRef: `case-bible:${String(goldenCaseBible.caseId)}:golden` },
   ]);
-  // ===== AI integration v1 (admin/offline; runtime narrative DISABLED default) =====
-  // Provider & model TIDAK pernah di-hardcode di domain; seluruhnya dari config/env.
+  // ===== AI runtime config (Firestore, tanpa redeploy) =====
+  // Sumber runtime: ai_runtime_config/production. Kredensial TETAP dari env
+  // server (GEMINI_API_KEY / future XKIRO_API_KEY / BITDEER_API_KEY).
+  // Tanpa dokumen Firestore / baca gagal → default dari env (behavior lama).
   const konfigurasiAi = opsi.konfigurasiAi ?? bacaKonfigurasiAi(process.env);
-  const penyediaTeks = opsi.penyediaTeks ?? (
-    konfigurasiAi.textReady
-      ? (() => {
-          const opsiTeks: { apiKey: string; model: string; timeoutMs: number; maxRetries: number; maxOutputTokens: number; apiBase?: string; countTokensEnabled: boolean; telemetri: ReturnType<typeof buatPenerimaTelemetriAi> } = {
-            apiKey: konfigurasiAi.geminiApiKey as string,
-            model: konfigurasiAi.textModel,
-            timeoutMs: konfigurasiAi.timeoutMs,
-            maxRetries: konfigurasiAi.maxRetries,
-            maxOutputTokens: konfigurasiAi.maxOutputTokens,
-            countTokensEnabled: bacaBooleanEnv("AI_COUNT_TOKENS_ENABLED"),
-            telemetri: buatPenerimaTelemetriAi(logger, konfigurasiAi.provider, konfigurasiAi.textModel),
-          };
-          if (process.env.GEMINI_API_BASE) opsiTeks.apiBase = process.env.GEMINI_API_BASE;
-          return new GeminiTextProvider(opsiTeks);
-        })()
-      : undefined
-  );
+  const repositoriKonfigurasiAi = new RepositoriKonfigurasiAiFirestore(firestore);
+  const routerAi = new RouterAi({
+    sumber: repositoriKonfigurasiAi,
+    defaultsEnv: {
+      provider: konfigurasiAi.provider,
+      textModel: konfigurasiAi.textModel,
+      timeoutMs: konfigurasiAi.timeoutMs,
+      maxRetries: konfigurasiAi.maxRetries,
+      maxOutputTokens: konfigurasiAi.maxOutputTokens,
+      textReady: konfigurasiAi.textReady,
+      imageReady: konfigurasiAi.imageReady,
+      caseGenerationEnabled: konfigurasiAi.caseGenerationEnabled,
+      runtimeNarrativeEnabled: konfigurasiAi.runtimeNarrativeEnabled,
+      assistantEnabled: konfigurasiAi.assistantEnabled,
+    },
+    kunci: {
+      geminiApiKey: konfigurasiAi.geminiApiKey,
+      xkiroApiKey: (process.env.XKIRO_API_KEY ?? "").trim() || undefined,
+      bitdeerApiKey: (process.env.BITDEER_API_KEY ?? "").trim() || undefined,
+    },
+    logger,
+    countTokensEnabled: bacaBooleanEnv("AI_COUNT_TOKENS_ENABLED"),
+    ...(opsi.routerTtlMs !== undefined ? { ttlMs: opsi.routerTtlMs } : {}),
+  });
+  // penyediaTeks = Router (Application → Router → Provider Adapter).
+  // Injeksi eksplisit (test/penyedia kustom) tetap dihormati.
+  const penyediaTeks = opsi.penyediaTeks ?? routerAi;
   const penyediaGambar = opsi.penyediaGambar ?? (
     konfigurasiAi.imageReady
       ? (() => {
@@ -271,9 +286,19 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     waktu,
   });
 
+  // Static pass-through: otoritas fitur ada di router (konfigurasi runtime
+  // Firestore). Gate dinamis hanya untuk jalur router; injeksi manual
+  // (test/penyedia kustom) memakai gate statis legacy agar override eksplisit
+  // dihormati. Produksi (tanpa injeksi) fully dynamic tanpa redeploy.
+  const pakaiRouterTeks = opsi.penyediaTeks === undefined;
+  const pakaiGambarEnv = opsi.penyediaGambar === undefined;
+  const gerbangDinamis = {
+    ...(pakaiRouterTeks ? { gerbangKasus: () => routerAi.pastikanAktif("caseGeneration") } : {}),
+    ...(pakaiGambarEnv ? { gerbangGambar: () => routerAi.pastikanAktif("image") } : {}),
+  };
   const layananProduksiKasus = new LayananProduksiKasus({
     konfigurasi: {
-      caseGenerationEnabled: konfigurasiAi.caseGenerationEnabled,
+      caseGenerationEnabled: pakaiRouterTeks ? true : konfigurasiAi.caseGenerationEnabled,
       penyediaTeks,
       penyediaGambar,
       penyimpananGambar,
@@ -283,6 +308,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
         provider: konfigurasiAi.provider,
         model: konfigurasiAi.textModel,
       },
+      ...gerbangDinamis,
     },
     repositoriVersi: {
       simpanVersiKasus: (versi) => repositoriVersiKasus.simpanVersiKasus(versi),
@@ -346,7 +372,9 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     layananInterogasi,
     layananResolusi,
     layananKomando,
-konfigurasiAi,
+  konfigurasiAi,
+    repositoriKonfigurasiAi,
+    routerAi,
     penyediaTeks,
     penyediaGambar,
     penyimpananGambar,

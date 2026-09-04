@@ -6,12 +6,15 @@ import { KesalahanIntegrasi } from "../fondasi/eror.js";
  * sesuai dokumen integrasi AI (KesalahanIntegrasi terstruktur).
  */
 export type KategoriKesalahanAi =
-  | "AUTHENTICATION" // 401/403 — api key invalid
+  | "AUTHENTICATION" // 401 — api key invalid
   | "QUOTA_RATE_LIMIT" // 429 — rate limit / kuota habis
   | "TIMEOUT" // timeout / abort
   | "INVALID_RESPONSE" // JSON/format respons rusak atau di luar kontrak
   | "UNSAFE_RESPONSE" // diblokir safety / output melanggar kontrak
   | "PROVIDER_UNAVAILABLE" // 5xx / network / provider mati
+  | "INVALID_REQUEST" // 400 — request ditolak provider (mis. parameter/model salah)
+  | "PERMISSION_DENIED" // 403 — kredensial valid tapi akses ditolak
+  | "MODEL_NOT_FOUND" // 404 — model tidak tersedia di provider
   | "DISABLED"; // fitur dimatikan oleh konfigurasi/feature flag
 
 export class KesalahanProviderAi extends KesalahanIntegrasi {
