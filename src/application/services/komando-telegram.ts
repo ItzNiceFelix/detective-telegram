@@ -829,7 +829,39 @@ export class KomandoTelegramLayanan {
       return berhasil({ command: "/case", message: msg });
     }
 
-    const msg = `Kasus aktif: ${sesi.caseId} (versi ${sesi.caseVersionId}).`;
+    let msg: string;
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const statusTeks = sesi.status === StatusSesi.OPEN ? "OPEN ✅" : sesi.status;
+      const tersangka = bible.suspects.map((s) => `• ${s.suspectId} — ${s.name} (${s.occupation})`).join("\n");
+      const proposal = sesi.accusationProposal
+        ? `\n\n⚖️ Proposal: ${sesi.accusationProposal.suspectId} (${sesi.accusationProposal.status}, votes: ${sesi.accusationProposal.votes.length})`
+        : "";
+      const final = sesi.finalAccusation ? `\n🔔 Final: ${sesi.finalAccusation.suspectId} ${sesi.finalAccusation.correctCulprit ? "(Benar)" : "(Salah)"}` : "";
+      msg = [
+        `📁 CASE ${String(sesi.caseId)}`,
+        bible.title,
+        ``,
+        `Status: ${statusTeks}${sesi.outcome ? ` • ${sesi.outcome}` : ""}`,
+        `Versi: ${String(sesi.caseVersionId)}`,
+        `Korban: ${bible.victim}`,
+        `Adegan: ${bible.scenes.map((s) => s.name).join(", ")}`,
+        ``,
+        `Evidence: ${sesi.discoveredEvidenceIds.length} ditemukan`,
+        `Detectives: ${sesi.playerIds.length}/6`,
+        ``,
+        `Tersangka:`,
+        tersangka,
+        proposal,
+        final,
+        ``,
+        `Gunakan: /investigate /suspects /timeline /contradictions`,
+      ]
+        .filter((b) => b.length > 0)
+        .join("\n");
+    } catch {
+      msg = `Kasus aktif: ${sesi.caseId} (versi ${sesi.caseVersionId}). Status: ${sesi.status}.`;
+    }
     await this.kirimPesanAman(chatId, msg, { command: "/case", updateId, sessionId: String(sesi.sessionId) });
     return berhasil({ command: "/case", message: msg, session: sesi });
   }
@@ -1153,7 +1185,9 @@ export class KomandoTelegramLayanan {
       return berhasil({ command: "/finalize", message: pesan, session: konteks.sesi });
     }
 
-    const pesanGagal = hasil.error instanceof Error ? hasil.error.message : "Terjadi kesalahan saat finalisasi.";
+    const pesanGagal = hasil.error instanceof Error
+      ? `${hasil.error.message}\n\nUrutan menutup kasus:\n1) /accuse <suspectId>\n2) /vote (tiap detektif)\n3) /finalize`
+      : "Terjadi kesalahan saat finalisasi.";
     await this.kirimPesanAman(chatId, pesanGagal, korelasi);
     return gagal(hasil.error);
   }

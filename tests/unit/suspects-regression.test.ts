@@ -100,6 +100,25 @@ function buatLayanan() {
     validasiAksesTelegram: async () => true,
     validasiGroupTelegram: async () => true,
     repositoriCaseBible: { ambilCaseBible: async (ref) => (ref === "case-bible:CASE-2026-001:v1.0" ? bibleAi : null) },
+    layananResolusi: {
+      prosesFinalisasiTuduhan: async ({ sessionId }: { sessionId: unknown }) => {
+        const { finalisasiTuduhan } = await import("../../src/domain/services/tuduhan.js");
+        const sesi = {
+          sessionId, caseId: buatIdKasus("CASE-2026-001"), caseVersionId: buatIdVersiKasus("v1.0"),
+          groupId: buatIdGrup("-1001"), status: StatusSesi.OPEN, outcome: null,
+          playerIds: [buatIdPemain("42")], discoveredEvidenceIds: [], examinedObjectIds: [],
+          unlockedDialogueIds: [], teamTheory: null, score: 0,
+          updatedAt: buatWaktuIso("2026-01-01T00:00:00.000Z"),
+          unlockedStatementIds: [], discoveredContradictionIds: [], knownTimelineEventIds: [],
+        };
+        try {
+          const hasil = finalisasiTuduhan(sesi as never, bibleAi, buatWaktuIso("2026-02-01T00:00:00.000Z"));
+          return { status: "berhasil", data: hasil.tuduhanAkhir } as const;
+        } catch (error) {
+          return { status: "gagal", error: error instanceof Error ? error : new Error(String(error)) } as const;
+        }
+      },
+    } as never,
   });
   return { layanan, terkirim };
 }
@@ -130,4 +149,35 @@ test("/suspects tanpa bible sama sekali → pesan error terkirim (tidak sunyi)",
   );
   assert.equal(hasil.status, "gagal");
   assert.ok(terkirim.some((p) => /Case Bible tidak ditemukan/i.test(p)), "error harus terkirim ke chat, bukan no-op");
+});
+
+test("/case tampilkan info lengkap: judul, korban, tersangka, status, progres", async () => {
+  const { layanan, terkirim } = buatLayanan();
+  const parser = new TelegramAdapter();
+  const hasil = await layanan.prosesUpdate(
+    parser.parseUpdate({
+      update_id: 902,
+      message: { message_id: 3, text: "/case", chat: { id: -1001, type: "group" }, from: { id: 42, username: "u" } },
+    }),
+  );
+  assert.equal(hasil.status, "berhasil");
+  const msg = String(hasil.data.message);
+  assert.match(msg, /The Gilded Alibi/);
+  assert.match(msg, /Korban/);
+  assert.match(msg, /Nona X/);
+  assert.match(msg, /OPEN/);
+  assert.ok(terkirim.some((p) => p.includes("The Gilded Alibi")));
+});
+
+test("/finalize tanpa proposal → gagal + panduan accuse/vote/finalize terkirim", async () => {
+  const { layanan, terkirim } = buatLayanan();
+  const parser = new TelegramAdapter();
+  const hasil = await layanan.prosesUpdate(
+    parser.parseUpdate({
+      update_id: 903,
+      message: { message_id: 4, text: "/finalize", chat: { id: -1001, type: "group" }, from: { id: 42, username: "u" } },
+    }),
+  );
+  assert.equal(hasil.status, "gagal");
+  assert.ok(terkirim.some((p) => /\/accuse/.test(p) && /\/vote/.test(p) && /\/finalize/.test(p)), "panduan urutan harus terkirim");
 });
