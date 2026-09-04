@@ -20,6 +20,7 @@ import { LayananInterogasiKasus, buatLayananInterogasiKasus } from "../applicati
 import { LayananResolusiKasus, buatLayananResolusiKasus } from "../application/services/resolusi-kasus.js";
 import { RendererNaratifDeterministik, RendererNaratifAi } from "../domain/services/renderer-naratif.js";
 import { RepositoriCaseBibleStatis, type KontrakRepositoriCaseBible } from "../kasus/case-bible-repository.js";
+import { RepositoriCaseBibleFirestore, RepositoriCaseBibleGabungan } from "../infrastructure/repositories/firestore/repositori-case-bible.js";
 import { goldenCaseBible } from "../kasus/fixtures/golden-case.js";
 import { buatLoggerStruktur, LoggerStruktur } from "../observability/logger.js";
 import { PenghitungBatasKejadian } from "../security/rate-limiter.js";
@@ -162,9 +163,14 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   // Case Bible. Default produksi: Golden Case fixture yang di-remap agar ref
   // cocok dengan konvensi `case-bible:{caseId}:golden` yang dipakai domain
   // services (caseId "CASE-001" â†’ ref "case-bible:CASE-001:golden").
-  const repositoriCaseBible = opsi.repositoriCaseBible ?? new RepositoriCaseBibleStatis([
+  // Bible AI hasil generate tersimpan di Firestore `case_bibles/{ref}`;
+  // gabungan statis→firestore agar SEMUA command playable untuk case
+  // golden maupun AI (golden = first gameplay, AI = case produksi).
+  const repositoriCaseBibleStatis = opsi.repositoriCaseBible ?? new RepositoriCaseBibleStatis([
     { ...goldenCaseBible, caseBibleRef: `case-bible:${String(goldenCaseBible.caseId)}:golden` },
   ]);
+  const repositoriCaseBibleFirestore = new RepositoriCaseBibleFirestore(firestore);
+  const repositoriCaseBible = new RepositoriCaseBibleGabungan(repositoriCaseBibleStatis, repositoriCaseBibleFirestore);
   // ===== AI runtime config (Firestore, tanpa redeploy) =====
   // Sumber runtime: ai_runtime_config/production. Kredensial TETAP dari env
   // server (GEMINI_API_KEY / future XKIRO_API_KEY / BITDEER_API_KEY).
@@ -318,6 +324,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
       simpanVersiKasus: (versi) => repositoriVersiKasus.simpanVersiKasus(versi),
     },
     repositoriAset: repositoriAsetVisual,
+    repositoriBible: repositoriCaseBibleFirestore,
   });
 
   const konfigurasiLayanan: KonfigurasiKomandoTelegram = {

@@ -20,11 +20,16 @@ import {
   type OpsiGenerasiKasus,
 } from "../../kasus/generasi-kasus.js";
 import { StatusVersiKasus, type VersiKasus } from "../../kasus/versi-kasus.js";
+import type { CaseBible } from "../../kasus/case-bible.js";
 import { KesalahanValidasi } from "../../fondasi/eror.js";
 
 export interface RepositoriVersiProduksi {
   simpanVersiKasus(versi: VersiKasus): Promise<VersiKasus>;
   ambilVersiKasusTerbitan?: () => Promise<VersiKasus | null>;
+}
+
+export interface RepositoriBibleProduksi {
+  simpanCaseBible(caseBible: CaseBible): Promise<void>;
 }
 
 export interface KonfigurasiLayananProduksi {
@@ -43,6 +48,8 @@ export interface KonfigurasiServiceProduksi {
   konfigurasi: KonfigurasiLayananProduksi;
   repositoriVersi: RepositoriVersiProduksi;
   repositoriAset: KontrakRepositoriAsetVisual | undefined;
+  /** Penyimpanan Case Bible AI (wajib di produksi agar case playable). */
+  repositoriBible?: RepositoriBibleProduksi | undefined;
 }
 
 /**
@@ -83,6 +90,11 @@ export class LayananProduksiKasus {
 
     // Sudah melewati validasiGerbangPublikasi(validasiSemua:true) di dalam.
     const kandidat = await buatKandidatKasus(seed, penyedia, opsiKasus);
+    // Simpan Case Bible AI ke Firestore SEBELUM versi DRAFT: tanpa ini case
+    // terbit tapi semua command gameplay gagal ("Case Bible tidak ditemukan").
+    if (this.cfg.repositoriBible) {
+      await this.cfg.repositoriBible.simpanCaseBible(kandidat.caseBible);
+    }
     const versiTervalidasi = publikasikanKandidatKasus(kandidat); // validasi penuh (solver/uniqueness/safety)
     // PRODUCTION FLOW (Part C): kandidat disimpan DRAFT menunggu asset gambar
     // durable; publish HANYA lewat admin `publishCase` SETELAH aset lengkap.
