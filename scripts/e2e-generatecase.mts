@@ -26,7 +26,7 @@ async function getUserId(username: string): Promise<number> {
     if (m) {
       const from = m.from as Record<string, unknown> | undefined;
       const ufrom = from?.username as string | undefined;
-      if (ufrom && ufrom.toLowerCase() === username.toLowerCase()) return from.id as number;
+      if (ufrom && ufrom.toLowerCase() === username.toLowerCase()) return Number(from?.id ?? 0);
       const chat = m.chat as Record<string, unknown> | undefined;
       if (chat && String(chat.id) === grup) { /* candidate */ }
     }

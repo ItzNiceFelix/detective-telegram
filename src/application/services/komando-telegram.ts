@@ -1133,6 +1133,27 @@ export class KomandoTelegramLayanan {
       return berhasil({ command: "/generatecase", message: "Perintah ini khusus admin grup." });
     }
 
+    const actionId = `telegram:update:${updateId}`;
+    const sesiIdempoten = `${String(groupId)}:generatecase:${updateId}` as IdSesiKasus;
+    // Klaim kunci idempotensi SEBELUM pesan ⏳ & AI call berat (120s deepseek).
+    // Duplicate webhook (Telegram retry saat Vercel timeout) → duplicate delivery
+    // berhenti di sini tanpa pesan ganda & tanpa generate kedua yang mubazir.
+    try {
+      const hasilKlaim = await this.konfigurasi.kontrakIdempoten.klaimKunci?.(actionId, sesiIdempoten);
+      if (hasilKlaim?.sudahAda) {
+        return berhasil({ command: "/generatecase", message: "Perintah ini sudah diproses sebelumnya. Tidak ada perubahan baru." });
+      }
+      if (!hasilKlaim) {
+        const kunciSebelumnya = await this.konfigurasi.kontrakIdempoten.ambilKunci(actionId, sesiIdempoten);
+        if (kunciSebelumnya) {
+          return berhasil({ command: "/generatecase", message: "Perintah ini sudah diproses sebelumnya. Tidak ada perubahan baru." });
+        }
+        await this.konfigurasi.kontrakIdempoten.simpanKunci({ actionId, sessionId: sesiIdempoten, repeated: false });
+      }
+    } catch {
+      // klaim idempotensi best-effort; gagal klaim → lanjut generate (tidak blokir)
+    }
+
     const produksi = this.konfigurasi.layananProduksiKasus;
     const tugasAset = this.konfigurasi.layananTugasAset;
     if (!produksi || !tugasAset) {

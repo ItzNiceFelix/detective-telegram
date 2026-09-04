@@ -148,6 +148,46 @@ test("/generatecase oleh non-admin ditolak", async () => {
   assert.equal(dibuat.length, 0);
 });
 
+test("/generatecase duplicate update_id → generate tidak diulang (idempoten)", async () => {
+  let panggilanGenerate = 0;
+  const duplikat: string[] = [];
+  class IdempotenDuplikat {
+    async ambilKunci() { return null; }
+    async simpanKunci() { /* simpan */ }
+    async klaimKunci() {
+      panggilanGenerate += 0;
+      const pertama = duplikat.length === 0;
+      duplikat.push("klaim");
+      return { sudahAda: !pertama };
+    }
+  }
+  const layanan = new KomandoTelegramLayanan({
+    repositoriVersiKasus: { ambilVersiKasusTerbitan: async () => buatVersiDraft() },
+    repositoriSesiKasus: { ambil: async () => null, simpan: async (s) => s, transaksi: async (r) => r({ id: "t" } as never) },
+    repositoriGrup: { ambil: async (g) => ({ groupId: g ?? buatIdGrup("-1001"), telegramChatId: "-1001", createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"), status: "ACTIVE" as const }), simpan: async (g) => g },
+    penerbitEventDomain: { kirim: async () => undefined },
+    kontrakIdempoten: new IdempotenDuplikat() as never,
+    waktu: { sekarangIso: () => buatWaktuIso("2026-02-01T00:00:00.000Z") },
+    kirimPesanTelegram: async () => undefined,
+    validasiAksesTelegram: async () => true,
+    validasiGroupTelegram: async () => true,
+    validasiAdminGrup: async () => true,
+    layananProduksiKasus: { generateCase: async () => { panggilanGenerate += 1; return kandidat; } },
+    layananTugasAset: {
+      buatTugasAset: async () => ({ taskId: "t-1" }),
+      kirimTugasAset: async (t) => ({ taskId: t, status: "WAITING_FOR_ADMIN" }),
+      verifikasiTugasAset: async (t) => ({ taskId: t, status: "VERIFIED" }),
+      tolakTugasAset: async (t) => ({ taskId: t, status: "WAITING_FOR_ADMIN" }),
+    },
+    repositoriAsetVisualProduksi: { ambilManifest: async () => manifestValid },
+  });
+
+  await layanan.prosesUpdate(updateAdmin("/generatecase mystery"));
+  await layanan.prosesUpdate(updateAdmin("/generatecase mystery"));
+
+  assert.equal(panggilanGenerate, 1);
+});
+
 test("/publishcase (admin) dengan manifest valid → simpan PUBLISHED", async () => {
   const { layanan, tersimpan } = buatLayanan({ admin: true, manifest: manifestValid });
 
