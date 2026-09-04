@@ -119,11 +119,14 @@ Firestore (`ai_runtime_config/production`):
 }
 ```
 
-**Lock production (2026-09-04, benchmark beban penuh case_generation):**
-`model=qwen/qwen3.5-flash:free` (JSON valid ~9.8s), `dialogueModel=hintModel=
-fallback.model=mistralai/ministral-3b` (JSON valid ~8.1s). Override per
-promptType opsional — kosong → pakai `text.model`. minimax*: coret (HTTP 200
-content kosong di semua varian, termasuk highspeed).
+**Lock production (2026-09-04 Opsi 1, skema Case Bible wajib di prompt):**
+`model=deepseek/deepseek-v4-flash` primer case_generation (satu-satunya yang
+VALID di gate penuh pada raw capture), `timeoutMs=120000` (2 menit, batas valid
+1000..120000, Vercel 300s), `maxRetries=0` (adapter no-retry → fallback).
+`fallback.model=qwen/qwen3.5-flash:free`. `dialogueModel=hintModel=
+mistralai/ministral-3b` (8.1s). `maxOutputTokens=4000` (raw 5861 char). Override
+per promptType opsional — kosong → `text.model`. minimax*: coret (HTTP 200
+content kosong semua varian highspeed).
 
 Tanpa key di env untuk provider terpilih → `AUTHENTICATION` jelas
 (tanpa fallback diam-diam).

@@ -33,7 +33,7 @@ export interface KonfigurasiLayananProduksi {
   penyediaGambar: KontrakPenyediaGambar | undefined;
   penyimpananGambar?: KontrakPenyimpananGambar | undefined;
   providerName: string;
-  opsiGenerasi?: { maxRetries?: number; provider?: string; model?: string };
+  opsiGenerasi?: { maxRetries?: number; maxOutputTokens?: number; provider?: string; model?: string };
   /** Gerbang dinamis opsional (router runtime config); dicek sebelum gate statis. */
   gerbangKasus?: () => Promise<void>;
   gerbangGambar?: () => Promise<void>;
@@ -74,6 +74,7 @@ export class LayananProduksiKasus {
 
     const opsiKasus: OpsiGenerasiKasus = {
       maxRetries: this.cfg.konfigurasi.opsiGenerasi?.maxRetries ?? 1,
+      maxOutputTokens: this.cfg.konfigurasi.opsiGenerasi?.maxOutputTokens ?? 4000,
       provider: this.cfg.konfigurasi.opsiGenerasi?.provider ?? this.cfg.konfigurasi.providerName,
     };
     if (this.cfg.konfigurasi.opsiGenerasi?.model) opsiKasus.model = this.cfg.konfigurasi.opsiGenerasi.model;

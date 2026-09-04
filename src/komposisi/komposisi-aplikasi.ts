@@ -304,7 +304,8 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
       penyimpananGambar,
       providerName: konfigurasiAi.provider,
       opsiGenerasi: {
-        maxRetries: konfigurasiAi.maxRetries,
+        maxRetries: 1,
+        maxOutputTokens: 4000,
         provider: konfigurasiAi.provider,
         model: konfigurasiAi.textModel,
       },

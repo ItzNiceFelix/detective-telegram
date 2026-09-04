@@ -44,6 +44,7 @@ export interface KandidatKasus {
 
 export interface OpsiGenerasiKasus {
   maxRetries?: number;
+  maxOutputTokens?: number;
   generatorVersion?: string;
   promptVersion?: string;
   schemaVersion?: number;
@@ -124,8 +125,10 @@ export async function buatKandidatKasusDenganPenyedia(
         seed: benih,
         provider: providerName,
         generatedAt,
+        skemaKandidat: DESKRIPSI_SKEMA_KANDIDAT,
+        contohKandidat: CONTOH_MINIMAL_KANDIDAT,
       },
-      maxTokens: 2400,
+      maxTokens: opsi.maxOutputTokens ?? 4000,
     };
 
     const hasil: ResponAi = await penyedia.generateText(request);
@@ -956,8 +959,92 @@ export function buatVersiKasusDariKandidat(kandidat: KandidatKasus, waktuPublika
   return publikasikanKandidatKasus(kandidat, waktuPublikasi);
 }
 
-export const CASE_GENERATION_INVARIANTS = [
-  "AI_CASE_01 — truth-first generation before narrative",
+export const DESKRIPSI_SKEMA_KANDIDAT = [
+  "Skema JSON Kandidat Kasus (wajib persis):",
+  "- Top-level: caseId: string, versionId: string, title: string, premise: string, genre: string, tags: string[], caseBible: { ... }",
+  "- caseBible.caseBibleRef: string (mis. \"case-bible:CASE-900:main\"), caseId: string (samakan top-level), title: string, victim: string, culpritSuspectId: string (harus cocok suspects[].suspectId)",
+  "- caseBible.scenes: [{ sceneId: string, name: string }]  // minimal 1",
+  "- caseBible.objects: [{ objectId, sceneId (harus ada di scenes), name, modeDiscovery: AUTO|CONDITIONAL|HIDDEN, prasyarat?: [{ evidenceDiscovered: string }], evidenceId?: string }]",
+  "- caseBible.observations: [{ observationId, objectId (harus ada di objects), text }]",
+  "- caseBible.evidence: [{ evidenceId, objectId (harus ada di objects), truthStatus: TRUE|FALSE|PARTIAL|AMBIGUOUS, relevance: DIRECT|SUPPORTING|CONTEXTUAL|RED_HERRING|IRRELEVANT, source: VISUAL|DOCUMENT|DIGITAL|TESTIMONIAL|TIMELINE|FORENSIC|ENVIRONMENT, relatedSuspects?: string[], relatedTimelineEvents?: string[] }]",
+  "- caseBible.suspects: [{ suspectId, name, relationship, occupation, publicProfile }]  // minimal 1",
+  "- caseBible.statements: [{ statementId, suspectId (harus ada), text, claim: { subject,predicate,value } }]",
+  "- caseBible.dialogueNodes: [{ nodeId, suspectId (harus ada), intents: ASK_ALIBI|ASK_VICTIM|ASK_MOTIVE|ASK_TIMELINE|ASK_RELATIONSHIP|ASK_EVIDENCE|CONFRONT_EVIDENCE, prasyarat: [{ jenis: EVIDENCE_DISCOVERED|STATEMENT_UNLOCKED|DIALOGUE_NODE_UNLOCKED|CONTRADICTION_DISCOVERED }], semanticResponse: { text }, unlocksStatementId?, unlocksNodeIds? }]",
+  "- caseBible.timelineEvents: [{ eventId, timestamp: { precision: EXACT|APPROXIMATE|RANGE|UNKNOWN, start: 'HH:MM', end?: string }, locationId?, actorIds: string[] (suspectIds), action: string, truthStatus: TRUE|FALSE|PARTIAL|UNKNOWN, relatedEvidenceIds: string[], relatedStatementIds: string[] }]  // minimal 1",
+  "- caseBible.causalRelations: [{ dari: string, ke: string, jenis: CAUSES|REQUIRES|ENABLES|PREVENTS|FOLLOWS|CONTRADICTS }]  // edge dependency CAUSES/REQUIRES/ENABLES/FOLLOWS tidak boleh membentuk cycle",
+  "- caseBible.proofNodes: [{ nodeId, kind: EVIDENCE|EVENT|INFERENCE|STATEMENT|SOLUTION_FACT }]  // minimal 1 SOLUTION_FACT, terhubung, tidak terisolasi",
+  "- caseBible.proofEdges: [{ dari: string, ke: string, relasi: SUPPORTS|CONTRADICTS|ESTABLISHES|REQUIRES|COMBINES_WITH, wajib: boolean }]",
+  "- caseBible.contradictionDefinitions: [{ contradictionId, statementId (harus ada), evidenceId (harus ada), severity: MINOR|SIGNIFICANT|CRITICAL, relatedSuspectId (harus ada), unlocksNodeId?, revealsTimelineEventId? }]",
+  "- Aturan dialogue: (1) minimal 1 node dengan prasyarat=[] (root); (2) setiap unlocksNodeIds/unlocksStatementId/unlocksNodeId/contradictionId/timelineEventId HARUS merujuk ID yang benar-benar ada; (3) dialogueNodes yang tidak terjangkau dari root → GAGAL. Untuk aman: buat SETIAP dialogueNode dengan prasyarat=[].",
+  "- Aturan proof graph: (1) semua proofNodes harus terjangkau dari proofNodes[0] lewat proofEdges (tidak ada node terisolasi); tepat 1 node kind=SOLUTION_FACT; (2) causalRelations 'dari'/'ke' hanya memakai evidenceId/timelineEventId/statementId/proofNodeId yang sudah terdaftar (jangan memakai contradictionId). Topologi aman: rantai sederhana N1→N2→…→SOLUTION_FACT dengan edge wajib=true.",
+  "- Semua ID saling merujuk wajib valid (proofEdges.dari/ke ada di proofNodes; evidence.objectId ada di objects; objects.sceneId ada di scenes; dll).",
+  "- Jangan tambahkan field terlarang (secret/password/apiKey/token/credential).",
+  "- Jangan memakai kata-kata ini di mana pun (termasuk title/premise/nama/dialog/statement): secret, token, credential, credentials, password, 'private data', 'explicit sexual', nude. Gunakan sinonim netral (mis. 'rahasia' → 'misteri tersembunyi', 'secret' → 'hidden truth').",
+  "- Hanya JSON (tanpa markdown, tanpa penjelasan luar).",
+].join("\n");
+
+export const CONTOH_MINIMAL_KANDIDAT = JSON.stringify(
+  {
+    caseId: "CASE-900",
+    versionId: "v-900",
+    title: "The Locked Ward",
+    premise: "A nurse hides a weapon beneath the cabinet.",
+    genre: "MYSTERY",
+    tags: ["mystery", "ward"],
+    caseBible: {
+      caseBibleRef: "case-bible:CASE-900:main",
+      caseId: "CASE-900",
+      title: "The Locked Ward",
+      victim: "Evelyn Cross",
+      culpritSuspectId: "S01",
+      scenes: [
+        { sceneId: "SCENE_01", name: "Ward" },
+        { sceneId: "SCENE_02", name: "Corridor" },
+      ],
+      objects: [
+        { objectId: "OBJ_01", sceneId: "SCENE_01", name: "Glass shard", modeDiscovery: "AUTO", evidenceId: "E01" },
+        { objectId: "OBJ_02", sceneId: "SCENE_01", name: "Medicine cabinet", modeDiscovery: "AUTO", evidenceId: "E02" },
+      ],
+      observations: [
+        { observationId: "OBS_01", objectId: "OBJ_01", text: "A shattered glass lies by the bed." },
+        { observationId: "OBS_02", objectId: "OBJ_02", text: "The cabinet is open." },
+      ],
+      evidence: [
+        { evidenceId: "E01", objectId: "OBJ_01", source: "FORENSIC", truthStatus: "TRUE", relevance: "DIRECT", relatedSuspects: ["S01"], relatedTimelineEvents: ["T01"] },
+        { evidenceId: "E02", objectId: "OBJ_02", source: "ENVIRONMENT", truthStatus: "TRUE", relevance: "SUPPORTING", relatedSuspects: ["S02"], relatedTimelineEvents: ["T02"] },
+      ],
+      suspects: [
+        { suspectId: "S01", name: "Mira Holt", relationship: "former nurse", occupation: "Nurse", publicProfile: "kept secrets" },
+        { suspectId: "S02", name: "Owen Dale", relationship: "colleague", occupation: "Doctor", publicProfile: "shared history" },
+      ],
+      statements: [{ statementId: "ST01", suspectId: "S01", text: "I never left the ward.", claim: { subject: "Mira", predicate: "was in", value: "the ward" } }],
+      dialogueNodes: [{ nodeId: "D01", suspectId: "S01", intents: ["ASK_ALIBI"], prasyarat: [], semanticResponse: { text: "I never left the ward." }, unlocksStatementId: "ST01" }],
+      timelineEvents: [
+        { eventId: "T01", timestamp: { precision: "EXACT", start: "21:00" }, locationId: "SCENE_01", actorIds: ["S01"], action: "Mira enters the ward", truthStatus: "TRUE", relatedEvidenceIds: ["E01"], relatedStatementIds: ["ST01"] },
+        { eventId: "T02", timestamp: { precision: "EXACT", start: "21:30" }, locationId: "SCENE_01", actorIds: ["S02"], action: "Owen checks cabinet", truthStatus: "TRUE", relatedEvidenceIds: ["E02"], relatedStatementIds: [] },
+      ],
+      causalRelations: [
+        { dari: "E01", ke: "T01", jenis: "REQUIRES" },
+        { dari: "T01", ke: "SOL_01", jenis: "CAUSES" },
+        { dari: "E02", ke: "SOL_01", jenis: "CAUSES" },
+      ],
+      proofNodes: [
+        { nodeId: "E01", kind: "EVIDENCE" },
+        { nodeId: "T01", kind: "EVENT" },
+        { nodeId: "SOL_01", kind: "SOLUTION_FACT" },
+      ],
+      proofEdges: [
+        { dari: "E01", ke: "T01", relasi: "SUPPORTS", wajib: true },
+        { dari: "T01", ke: "SOL_01", relasi: "ESTABLISHES", wajib: true },
+      ],
+      contradictionDefinitions: [{ contradictionId: "C01", statementId: "ST01", evidenceId: "E01", severity: "CRITICAL", relatedSuspectId: "S01", unlocksNodeId: "D01" }],
+    },
+  },
+  null,
+  2,
+);
+
+export const CASE_GENERATION_INVARIANTS = [  "AI_CASE_01 — truth-first generation before narrative",
   "AI_CASE_02 — malformed or invalid JSON rejected without silent repair",
   "AI_CASE_03 — published CaseVersion remains immutable",
   "AI_CASE_04 — generation happens outside runtime gameplay and Firestore transaction",

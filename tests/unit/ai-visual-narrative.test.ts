@@ -129,6 +129,18 @@ test("prompt injection is sanitized before image prompt generation", () => {
   assert.match(prompt, /noir/i);
 });
 
+test("prompt visual memuat narasi kanonik case dari compositionNotes", () => {
+  const builder = new PembuatPromptVisual();
+  const prompt = builder.bangunPromptVisual({
+    ...visualPlan,
+    compositionNotes: ["Case: The Locked Ward. Korban: Evelyn Cross. Scene: Ward."],
+  });
+
+  assert.match(prompt, /Narasi kanonik/);
+  assert.match(prompt, /The Locked Ward/);
+  assert.match(prompt, /Evelyn Cross/);
+});
+
 test("narrative renderer validates and falls back on invalid semantic output", async () => {
   const provider = new FakeAiProvider([{ output: "The culprit is definitely the suspect.", warnings: [] }]);
   const renderer = new RendererNaratifAi(provider, new RendererNaratifDeterministik());

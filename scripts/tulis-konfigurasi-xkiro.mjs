@@ -22,22 +22,22 @@ async function main() {
     text: {
       enabled: true,
       provider: "xkiro",
-      model: "qwen/qwen3.5-flash:free",
+      model: "deepseek/deepseek-v4-flash",
       dialogueModel: "mistralai/ministral-3b",
       hintModel: "mistralai/ministral-3b",
-      fallback: { provider: "xkiro", model: "mistralai/ministral-3b" },
+      fallback: { provider: "xkiro", model: "qwen/qwen3.5-flash:free" },
       baseUrl: "https://api.xkiro.com/v1",
       maxInputTokens: 8192,
-      maxOutputTokens: 2400,
-      maxRetries: 1,
-      timeoutMs: 60000,
+      maxOutputTokens: 4000,
+      maxRetries: 0,
+      timeoutMs: 120000,
     },
     runtimeNarrative: { enabled: true },
     assistant: { enabled: true },
     image: { enabled: false, mode: "HUMAN_IN_LOOP" },
     caseGeneration: { enabled: true },
     updatedAt: sekarang,
-    updatedBy: "ops-lock-qwen-ministral",
+    updatedBy: "ops-lock-deepseek-ministral-120s",
   };
 
   const sebelum = await doc.get();

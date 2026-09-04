@@ -1378,6 +1378,12 @@ function turunanVisualPlanDariKasus(caseBible: CaseBible): VisualPlan[] {
           ? objs.map((o) => ({ id: o.objectId, label: o.name, entityId: o.objectId, kind: "object" }))
           : [{ id: adegan.sceneId, label: adegan.name, entityId: adegan.sceneId, kind: "scene" }];
 
+    const objekAdegan = objs.length > 0 ? ` Object di adegan: ${objs.map((o) => o.name).join("; ")}.` : "";
+    const peristiwa = caseBible.timelineEvents
+      .filter((e) => !e.locationId || e.locationId === adegan.sceneId)
+      .map((e) => e.action);
+    const narasi = peristiwa.length > 0 ? ` Kejadian: ${peristiwa.join("; ")}.` : "";
+
     return {
       planId: `PLAN-${adegan.sceneId}`,
       sceneId: adegan.sceneId,
@@ -1385,7 +1391,9 @@ function turunanVisualPlanDariKasus(caseBible: CaseBible): VisualPlan[] {
       requiredClues,
       forbiddenClues: [],
       inspectableObjects: objs.map((o) => o.objectId),
-      compositionNotes: [`Scene: ${adegan.name}`],
+      compositionNotes: [
+        `Case: ${caseBible.title}. Korban: ${caseBible.victim}. Scene: ${adegan.name}.${objekAdegan}${narasi}`,
+      ],
       styleConstraints: ["no text overlays", "no letters or words in the image", "cinematic investigative lighting"],
     };
   });

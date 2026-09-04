@@ -214,20 +214,22 @@ export function bersihkanInputAi(value: string): string {
 export class PembuatPromptVisual {
   bangunPromptVisual(plan: VisualPlan, konteks: Record<string, unknown> = {}): string {
     const scene = bersihkanInputAi(String(konteks.scene ?? plan.sceneId));
+    const narasi = [plan.compositionNotes?.map((item) => bersihkanInputAi(item)).join(" ") ?? ""].filter((t) => t.length > 0).join(" ");
     const required = plan.requiredClues.map((item) => `${item.kind}:${item.entityId}:${bersihkanInputAi(item.label)}`).join(", ");
     const forbidden = plan.forbiddenClues.map((item) => `${item.kind}:${item.entityId}:${bersihkanInputAi(item.label)}`).join(", ");
     const style = plan.styleConstraints?.map((item) => bersihkanInputAi(item)).join("; ") ?? "cinematic noir mystery";
     const constraints = plan.visualConstraints?.map((item) => bersihkanInputAi(item)).join("; ") ?? "No text overlays, no new suspect, no new weapon, no canonical fact changes.";
 
     return `
-      Generate a single mystery scene illustration for case scene ${scene}. 
-      Purpose: ${plan.purpose}. 
-      Required clues: ${required || "none"}. 
-      Forbidden clues: ${forbidden || "none"}. 
-      Inspectable objects: ${plan.inspectableObjects.map((item) => bersihkanInputAi(item)).join(", ") || "none"}. 
-      Style: ${style}. 
-      Constraints: ${constraints}. 
-      Keep canonical facts unchanged: only render approved scene details. 
+      Generate a single mystery scene illustration for case scene ${scene}.
+      Purpose: ${plan.purpose}.
+      Narasi kanonik (WAJIB diikuti, jangan ubah fakta): ${narasi || "none"}.
+      Required clues: ${required || "none"}.
+      Forbidden clues: ${forbidden || "none"}.
+      Inspectable objects: ${plan.inspectableObjects.map((item) => bersihkanInputAi(item)).join(", ") || "none"}.
+      Style: ${style}.
+      Constraints: ${constraints}.
+      Keep canonical facts unchanged: only render approved scene details.
       Return only JSON with assetId, uri, status, format, sizeBytes, requiredClues, forbiddenClues, verifyNotes.
     `;
   }

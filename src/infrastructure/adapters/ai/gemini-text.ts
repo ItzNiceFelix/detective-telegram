@@ -205,13 +205,26 @@ export class GeminiTextProvider implements PintuAi {
   private bangunPrompt(request: PermintaanAi): string {
     // Prompt generik dari kontrak; TIDAK memuat secret/Firebase/Telegram.
     // Disarikan → client hanya melihat {promptType, context} (tanpa personal data).
-    return [
+    // `skemaKandidat`/`contohKandidat` (jika ada di context) dirender sebagai
+    // seksi terpisah agar terbaca model, bukan string JSON-escaped.
+    const kontek = (request.context ?? {}) as Record<string, unknown>;
+    const skema = typeof kontek.skemaKandidat === "string" ? kontek.skemaKandidat : undefined;
+    const contoh = typeof kontek.contohKandidat === "string" ? kontek.contohKandidat : undefined;
+    const basis: Record<string, unknown> = { ...kontek };
+    if (skema !== undefined) delete basis.skemaKandidat;
+    if (contoh !== undefined) delete basis.contohKandidat;
+    const baris = [
       `Tipe permintaan: ${request.promptType}`,
-      `Kontek:\n${JSON.stringify(request.context ?? {})}`,
-      request.promptType === "case_generation"
-        ? "Kembalikan hanya JSON valid sesuai skema kandidat kasus."
-        : "Jawab hanya berdasarkan kontek yang diberikan.",
-    ].join("\n");
+      `Kontek:\n${JSON.stringify(basis)}`,
+    ];
+    if (request.promptType === "case_generation") {
+      if (skema) baris.push(`Skema wajib:\n${skema}`);
+      if (contoh) baris.push(`Contoh JSON minimal (ikuti bentuk & aturan referensinya):\n${contoh}`);
+      baris.push("Kembalikan hanya JSON valid sesuai skema di atas.");
+    } else {
+      baris.push("Jawab hanya berdasarkan kontek yang diberikan.");
+    }
+    return baris.join("\n");
   }
 
   private layakRetry(error: unknown): boolean {

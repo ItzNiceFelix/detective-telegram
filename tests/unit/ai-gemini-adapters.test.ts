@@ -231,6 +231,8 @@ test("text: kandidat kosong → UNSAFE_RESPONSE (kodeMekanis 'kandidat kosong')"
       return true;
     },
   );
+});
+
 // ===== GeminiImageProvider =====
 
 const dataGambarInline = {
@@ -281,4 +283,22 @@ test("image: tanpa inline data → UNSAFE_RESPONSE", async () => {
     },
   );
 });
+
+test("text: case_generation + skemaKandidat di context → prompt memuat Skema wajib + contoh", async () => {
+  let bodyTangkap: Record<string, unknown> = {};
+  const { impl } = buatMockFetch(async (_url, init) => {
+    bodyTangkap = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return responsJson({ candidates: [{ content: { parts: [{ text: "{}" }] } }] });
+  });
+  const provider = new GeminiTextProvider({ apiKey: "k", model: "m", fetchImpl: impl, maxRetries: 0 });
+  await provider.generateText({
+    promptType: "case_generation",
+    context: { seed: { genre: "x" }, skemaKandidat: "SKEMA-WAJIB-timelineEvents", contohKandidat: "{\"caseId\":\"C\"}" },
+  });
+  const contents = (bodyTangkap["contents"] ?? []) as Array<{ parts?: Array<{ text?: string }> }>;
+  const teks = contents[0]?.parts?.[0]?.text ?? "";
+  assert.ok(teks.includes("Skema wajib:"));
+  assert.ok(teks.includes("SKEMA-WAJIB-timelineEvents"));
+  assert.ok(teks.includes("Contoh JSON minimal"));
+  assert.ok(!teks.includes("\\\"skemaKandidat\\\""));
 });

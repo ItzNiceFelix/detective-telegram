@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { FakeAiProvider } from "../../src/ai/fake-provider.js";
-import { buatKandidatKasus, validasiGerbangPublikasi, validasiLinimasa, validasiReferensiKasus, validasiStrukturKasus, ujiKeunikanSolusi, ujiKeterpecahanKasus } from "../../src/kasus/generasi-kasus.js";
+import { buatKandidatKasus, validasiGerbangPublikasi, validasiLinimasa, validasiReferensiKasus, validasiStrukturKasus, ujiKeunikanSolusi, ujiKeterpecahanKasus, DESKRIPSI_SKEMA_KANDIDAT, CONTOH_MINIMAL_KANDIDAT } from "../../src/kasus/generasi-kasus.js";
 
 function buatCaseBibleValid(): any {
   return {
@@ -166,4 +166,41 @@ test("unsafe content is rejected by moderation gate", () => {
   };
 
   assert.throws(() => validasiGerbangPublikasi(kandidat as any, { validasiSemua: true }), /moderasi|Secret Password Leak/);
+});
+
+test("CONTOH_MINIMAL_KANDIDAT harus lolos gate publish penuh", async () => {
+  const provider = new FakeAiProvider([{ output: CONTOH_MINIMAL_KANDIDAT, warnings: [] }]);
+  const kandidat = await buatKandidatKasus({
+    genre: "MYSTERY",
+    setting: "hospital",
+    difficulty: "DETECTIVE",
+    suspectCount: 2,
+    sceneCount: 1,
+    mustUseMechanics: ["timeline_contradiction"],
+  }, provider, { maxRetries: 0, provider: "fake-ai" });
+  assert.equal(kandidat.caseBible.timelineEvents.length > 0, true);
+  assert.equal(kandidat.caseBible.proofNodes.length > 0, true);
+  assert.equal(validasiGerbangPublikasi(kandidat, { validasiSemua: true }).valid, true);
+});
+
+test("DESKRIPSI_SKEMA_KANDIDAT memuat field wajib gate (timeline, proof)", () => {
+  for (const kunci of ["timelineEvents", "proofNodes", "proofEdges", "culpritSuspectId", "caseBibleRef"]) {
+    assert.equal(DESKRIPSI_SKEMA_KANDIDAT.includes(kunci), true);
+  }
+});
+
+test("buatKandidatKasus mengirim skema+contoh di context ke provider", async () => {
+  const provider = new FakeAiProvider([CONTOH_MINIMAL_KANDIDAT]);
+  await buatKandidatKasus({
+    genre: "MYSTERY",
+    setting: "hospital",
+    difficulty: "DETECTIVE",
+    suspectCount: 2,
+    sceneCount: 1,
+    mustUseMechanics: ["timeline_contradiction"],
+  }, provider, { maxRetries: 0 });
+  const ctx = (provider.calls[0]?.context ?? {}) as Record<string, unknown>;
+  assert.equal(typeof ctx["skemaKandidat"], "string");
+  assert.equal(typeof ctx["contohKandidat"], "string");
+  assert.ok(String(ctx["skemaKandidat"]).includes("timelineEvents"));
 });

@@ -469,6 +469,22 @@ test("24. fallback: 429 primer → TIDAK ada call fallback; 5xx → fallback tep
   assert.equal(t2.urls.filter((u) => u.includes("chat/completions")).length, 1);
 });
 
+// ===== 25. skema kandidat ditempel sebagai seksi terpisah =====
+
+test("25. case_generation + skemaKandidat di context → prompt memuat Skema wajib + contoh", async () => {
+  const t: TangkapFetch = { urls: [], headers: [], bodies: [], calls: 0 };
+  const fetchImpl = buatMockFetch(async () => responsJson(dataChatOk("{}")), t);
+  await providerUji({ fetchImpl }).generateText({
+    promptType: "case_generation",
+    context: { seed: { genre: "x" }, skemaKandidat: "SKEMA-WAJIB-timelineEvents", contohKandidat: "{\"caseId\":\"C\"}" },
+  });
+  const konten = String((t.bodies[0]?.["messages"] as Array<Record<string, string>>)?.[0]?.["content"] ?? "");
+  assert.ok(konten.includes("Skema wajib:"));
+  assert.ok(konten.includes("SKEMA-WAJIB-timelineEvents"));
+  assert.ok(konten.includes("Contoh JSON minimal"));
+  assert.ok(!konten.includes("\\\"skemaKandidat\\\""));
+});
+
 // ===== klasifikasi helper =====
 
 test("klasifikasikanStatusXkiro: petakan semua kode sesuai kontrak", () => {
