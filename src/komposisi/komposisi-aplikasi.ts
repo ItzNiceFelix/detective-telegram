@@ -351,6 +351,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
       tolakTugasAset: (taskId, reason) => layananTugasAset.tolakTugasAset(taskId, reason),
     },
     repositoriAsetVisualProduksi: { ambilManifest: (caseId) => repositoriAsetVisual.ambilManifest(caseId) },
+    pengirimInteraktif: pengirimTelegram,
   };
 
   const layananKomando = new KomandoTelegramLayanan(konfigurasiLayanan);

@@ -9,6 +9,7 @@ import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
 import { buatIdEvent, buatIdGrup, buatIdKasus, buatIdSesiKasus, buatIdVersiKasus, type IdEvent, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
 import { StatusVersiKasus, publikasiVersiKasus, type VersiKasus } from "../../kasus/versi-kasus.js";
 import type { PermintaanTelegram } from "../../infrastructure/adapters/telegram/telegram.js";
+import type { KibordInlineTelegram } from "../../infrastructure/adapters/telegram/telegram.js";
 import type { KontrakRepositoriCaseBible } from "../../kasus/case-bible-repository.js";
 import type { CaseBible, MaksudInterogasi, PeristiwaLinimasa } from "../../kasus/case-bible.js";
 import type { LayananInvestigasiKasus } from "../../application/services/investigasi-kasus.js";
@@ -18,6 +19,21 @@ import type { PintuRendererNaratif } from "../../domain/services/renderer-narati
 import { renderDaftarObjek, renderHasilPeriksaObjek } from "./render-investigasi.js";
 import type { BenihKasus, KandidatKasus, OpsiGenerasiKasus } from "../../kasus/generasi-kasus.js";
 import type { ManifestAsetVisual, VisualPlan } from "../../ai/visual-pipeline.js";
+import { uraiDataCallback, type AksiCallback } from "../../telegram/kontrak-callback.js";
+import {
+  kibordDaftarAdegan,
+  kibordDaftarBukti,
+  kibordDaftarObjek,
+  kibordDaftarTersangka,
+  kibordDetailTersangka,
+  kibordHudUtama,
+  kibordKonfirmasiFinalisasi,
+  kibordKonfrontasiBukti,
+  kibordLobby,
+  kibordMaksudInterogasi,
+  kibordVote,
+  teksHud,
+} from "../../telegram/kibord-game.js";
 
 export interface RepositoriVersiKasusTelegram {
   ambilVersiKasus?: (caseId?: IdKasus, versionId?: IdVersiKasus) => Promise<VersiKasus | null>;
@@ -83,6 +99,15 @@ export interface KonfigurasiKomandoTelegram {
     tolakTugasAset(taskId: string, reason: string): Promise<{ taskId: string; status: string }>;
   };
   repositoriAsetVisualProduksi?: { ambilManifest(caseId: string): Promise<ManifestAsetVisual | null> };
+  /** Adapter presentasi interaktif (keyboard/edit/answer/pin) — opsional agar wiring lama tetap jalan. */
+  pengirimInteraktif?: {
+    kirimPesanKibord(chatId: string, text: string, kibord: KibordInlineTelegram, opsi?: { parseMode?: "Markdown" }): Promise<number>;
+    suntingPesanKibord(chatId: string, messageId: number, text: string, kibord?: KibordInlineTelegram, opsi?: { parseMode?: "Markdown" }): Promise<void>;
+    jawabCallback(callbackId: string, teks?: string): Promise<void>;
+    sematkanPesan(chatId: string, messageId: number): Promise<void>;
+    lucutiSematPesan(chatId: string, messageId: number): Promise<void>;
+    padamPesan(chatId: string, messageId: number): Promise<void>;
+  };
 }
 
 export interface HasilPerintahTelegram {
@@ -156,7 +181,7 @@ export class KomandoTelegramLayanan {
           command = baseCommand.toLowerCase();
         }
       }
-      if (!command) {
+      if (!command && !permintaan.callback) {
         return gagal(new KesalahanValidasi("Perintah tidak valid."));
       }
 
@@ -183,6 +208,12 @@ export class KomandoTelegramLayanan {
         return gagal(new KesalahanAutorisasi("Anda tidak memiliki akses untuk mengelola grup ini."));
       }
 
+      // CALLBACK inline keyboard: actor SELALU userIdTelegram (dari `from`),
+      // bukan dari data callback. Route sebelum parsing command teks.
+      if (permintaan.callback) {
+        return await this.tanganiCallback(groupId, userId, chatId, permintaan.updateId, permintaan.callback);
+      }
+
       // SECURITY BOUNDARY (BLOCKER 2) — validasi input mentah untuk SEMUA command.
       // Enforce configured length limits: command, arguments, free text.
       // Invalid input berhenti SEBELUM dispatch ke handler apa pun.
@@ -196,7 +227,7 @@ export class KomandoTelegramLayanan {
 
       // SECURITY BOUNDARY (BLOCKER 3) — amanUntukMutasiGame hanya untuk command
       // yang melakukan mutasi gameplay. Hasilnya WAJIB dicek; tidak pernah diabaikan.
-      if (KOMANDO_MUTASI_GAMEPLAY.has(command)) {
+      if (command && KOMANDO_MUTASI_GAMEPLAY.has(command)) {
         // SECURITY BOUNDARY (BLOCKER 3) — helper ini THROWS bila context
         // user/group tidak valid atau akses grup belum tervalidasi. Hasilnya
         // tidak pernah boleh diabaikan; setiap command mutasi gameplay wajib
@@ -1429,6 +1460,454 @@ export class KomandoTelegramLayanan {
       await this.kirimPesanAman(chatId, pesan, { command: "/resendtask", updateId });
       return berhasil({ command: "/resendtask", message: pesan });
     }
+  }
+
+  // ====== CALLBACK INLINE KEYBOARD (M2) ======
+  // UI layer: parse kontrak v1 → panggil handler application yang SAMA dengan
+  // command (converge, tanpa duplikasi logic). Actor SELALU userId (dari `from`).
+  private async tanganiCallback(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    callback: NonNullable<PermintaanTelegram["callback"]>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    const jawab = async (teks?: string): Promise<void> => {
+      try {
+        await interaktif?.jawabCallback(callback.callbackId, teks);
+      } catch {
+        // best-effort
+      }
+    };
+
+    const terurai = uraiDataCallback(callback.data);
+    if (!terurai) {
+      await jawab("Aksi tidak dikenal.");
+      return berhasil({ command: "callback", message: "Callback tidak dikenal." });
+    }
+
+    const aksi = terurai.aksi;
+    const args = terurai.args;
+
+    // Aksi navigasi ringan yang tidak butuh sesi gameplay.
+    if (aksi === "join") {
+      const hasil = await this.joinSesi(groupId, userId, chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Gagal join.");
+      return hasil;
+    }
+
+    if (aksi === "hud" || aksi === "back") {
+      return await this.kirimHud(groupId, chatId, updateId, args[0], jawab);
+    }
+
+    if (aksi === "suspects") {
+      const hasil = await this.tampilkanTersangka(groupId, chatId, updateId);
+      if (hasil.status === "berhasil") {
+        try {
+          const sesi = await this.ambilSesiAktifGrup(groupId);
+          if (sesi && interaktif && callback.messageId) {
+            const bible = await this.ambilCaseBibleUntukSesi(sesi);
+            await interaktif.suntingPesanKibord(chatId, callback.messageId, hasil.data.message, kibordDaftarTersangka(bible));
+          }
+        } catch {
+          // fallback: pesan biasa sudah terkirim
+        }
+      }
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "suspect") {
+      return await this.tampilkanDetailTersangka(groupId, chatId, updateId, args[0] ?? "", callback.messageId, jawab);
+    }
+
+    if (aksi === "investigate") {
+      const target = args[0];
+      if (!target) return await this.kirimDaftarAdegan(groupId, chatId, updateId, callback.messageId, jawab);
+      const hasil = await this.lakukanInvestigasi(groupId, userId, [target], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "inspect") {
+      const target = args[0] ?? "";
+      if (!target) {
+        await jawab("Target tidak valid.");
+        return berhasil({ command: "callback", message: "Target inspect tidak valid." });
+      }
+      const hasil = await this.lakukanPeriksa(groupId, userId, [target], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "interrogate") {
+      return await this.tampilkanMaksudInterogasi(groupId, chatId, updateId, args[0] ?? "", callback.messageId, jawab);
+    }
+
+    if (aksi === "interrogate_maksud") {
+      const hasil = await this.lakukanInterogasi(groupId, userId, [args[0] ?? "", args[1] ?? ""], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "confront") {
+      return await this.tampilkanKonfrontasiBukti(groupId, chatId, updateId, args[0] ?? "", callback.messageId, jawab);
+    }
+
+    if (aksi === "confront_evidence") {
+      const hasil = await this.lakukanKonfrontasi(groupId, userId, [args[0] ?? "", args[1] ?? ""], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "timeline") {
+      const hasil = await this.tampilkanLinimasa(groupId, userId, chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "contradictions") {
+      const hasil = await this.tampilkanKontradiksi(groupId, chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "theory") {
+      const target = args[0];
+      if (!target) return await this.tampilkanTeori(groupId, chatId, updateId, callback.messageId, jawab);
+      const hasil = await this.perbaruiTeori(groupId, userId, [target], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "accuse") {
+      const target = args[0];
+      if (!target) return await this.tampilkanPengajuanTuduhan(groupId, chatId, updateId, callback.messageId, jawab);
+      const hasil = await this.ajukanAkusasi(groupId, userId, [target], chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "vote") {
+      const hasil = await this.suaraAkusasi(groupId, userId, chatId, updateId);
+      if (hasil.status === "berhasil" && interaktif && callback.messageId) {
+        try {
+          const sesi = await this.ambilSesiAktifGrup(groupId);
+          if (sesi) await this.refreshVoteBoard(chatId, callback.messageId, sesi);
+        } catch {
+          // aggregate refresh best-effort
+        }
+      }
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    if (aksi === "finalize") {
+      return await this.tampilkanKonfirmasiFinalisasi(chatId, updateId, callback.messageId, jawab);
+    }
+
+    if (aksi === "confirm_finalize") {
+      const hasil = await this.finalisasiAkusasi(groupId, userId, chatId, updateId);
+      await jawab(hasil.status === "berhasil" ? undefined : "Tidak tersedia.");
+      return hasil;
+    }
+
+    await jawab("Aksi tidak dikenal.");
+    return berhasil({ command: "callback", message: "Callback tidak dikenal." });
+  }
+
+  private async jawabCallbackAman(callbackId: string, teks?: string): Promise<void> {
+    try {
+      await this.konfigurasi.pengirimInteraktif?.jawabCallback(callbackId, teks);
+    } catch {
+      // best-effort
+    }
+  }
+
+  private async kirimHud(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    sub: string | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      await jawab("Tidak ada sesi aktif.");
+      return berhasil({ command: "callback", message: "Tidak ada sesi aktif." });
+    }
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const interaktif = this.konfigurasi.pengirimInteraktif;
+      if (sub === "investigate") {
+        const teks = `🔎 INVESTIGATE\n\nPilih lokasi:`;
+        if (interaktif) {
+          const id = await interaktif.kirimPesanKibord(chatId, teks, kibordDaftarAdegan(bible));
+          void id;
+        } else {
+          await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+        }
+        await jawab();
+        return berhasil({ command: "callback", message: teks, session: sesi });
+      }
+      if (sub === "evidence") {
+        const daftar = sesi.discoveredEvidenceIds.length === 0
+          ? "🧪 No evidence has been collected yet."
+          : `🧪 Evidence\n\n${sesi.discoveredEvidenceIds.map((e) => `• ${e}`).join("\n")}`;
+        if (interaktif) {
+          await interaktif.kirimPesanKibord(chatId, daftar, kibordDaftarBukti(sesi.discoveredEvidenceIds));
+        } else {
+          await this.kirimPesanAman(chatId, daftar, { command: "callback", updateId });
+        }
+        await jawab();
+        return berhasil({ command: "callback", message: daftar, session: sesi });
+      }
+      if (sub === "theory") {
+        return await this.tampilkanTeori(groupId, chatId, updateId, undefined, jawab);
+      }
+      if (sub === "accuse" || sub === "evidence_detail") {
+        return await this.tampilkanPengajuanTuduhan(groupId, chatId, updateId, undefined, jawab);
+      }
+      const teks = teksHud(sesi, bible);
+      if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, teks, kibordHudUtama());
+      } else {
+        await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      }
+      await jawab();
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    } catch (error) {
+      await jawab("Tidak tersedia.");
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("HUD tidak tersedia."));
+    }
+  }
+
+  private async kirimDaftarAdegan(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      await jawab("Tidak ada sesi aktif.");
+      return berhasil({ command: "callback", message: "Tidak ada sesi aktif." });
+    }
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const teks = `🔎 INVESTIGATE\n\nPilih lokasi:`;
+      const interaktif = this.konfigurasi.pengirimInteraktif;
+      if (interaktif && messageId) {
+        await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordDaftarAdegan(bible));
+      } else if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, teks, kibordDaftarAdegan(bible));
+      } else {
+        await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      }
+      await jawab();
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    } catch (error) {
+      await jawab("Tidak tersedia.");
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("Daftar adegan tidak tersedia."));
+    }
+  }
+
+  private async tampilkanDetailTersangka(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    suspectId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi || !suspectId) {
+      await jawab("Tidak tersedia.");
+      return berhasil({ command: "callback", message: "Suspect tidak valid." });
+    }
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const s = bible.suspects.find((x) => x.suspectId === suspectId);
+      if (!s) {
+        await jawab("Suspect tidak ditemukan.");
+        return berhasil({ command: "callback", message: "Suspect tidak ditemukan." });
+      }
+      const teks = `👤 ${s.name.toUpperCase()}\n${s.occupation}\n\n${s.publicProfile}`;
+      const interaktif = this.konfigurasi.pengirimInteraktif;
+      if (interaktif && messageId) {
+        await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordDetailTersangka(suspectId));
+      } else if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, teks, kibordDetailTersangka(suspectId));
+      } else {
+        await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      }
+      await jawab();
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    } catch (error) {
+      await jawab("Tidak tersedia.");
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("Detail suspect tidak tersedia."));
+    }
+  }
+
+  private async tampilkanMaksudInterogasi(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    suspectId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi || !suspectId) {
+      await jawab("Tidak tersedia.");
+      return berhasil({ command: "callback", message: "Suspect tidak valid." });
+    }
+    const teks = `💬 INTERROGATION\n\nApa yang ditanyakan?`;
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (interaktif && messageId) {
+      await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordMaksudInterogasi(suspectId));
+    } else if (interaktif) {
+      await interaktif.kirimPesanKibord(chatId, teks, kibordMaksudInterogasi(suspectId));
+    } else {
+      await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+    }
+    await jawab();
+    return berhasil({ command: "callback", message: teks, session: sesi });
+  }
+
+  private async tampilkanKonfrontasiBukti(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    suspectId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi || !suspectId) {
+      await jawab("Tidak tersedia.");
+      return berhasil({ command: "callback", message: "Suspect tidak valid." });
+    }
+    if (sesi.discoveredEvidenceIds.length === 0) {
+      await jawab("Belum ada evidence.");
+      const teks = `⚡ CONFRONTATION\n\nBelum ada evidence yang ditemukan.`;
+      await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    }
+    const teks = `⚡ CONFRONTATION\n\nPilih evidence:`;
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (interaktif && messageId) {
+      await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordKonfrontasiBukti(suspectId, sesi.discoveredEvidenceIds));
+    } else if (interaktif) {
+      await interaktif.kirimPesanKibord(chatId, teks, kibordKonfrontasiBukti(suspectId, sesi.discoveredEvidenceIds));
+    } else {
+      await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+    }
+    await jawab();
+    return berhasil({ command: "callback", message: teks, session: sesi });
+  }
+
+  private async tampilkanTeori(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      await jawab("Tidak ada sesi aktif.");
+      return berhasil({ command: "callback", message: "Tidak ada sesi aktif." });
+    }
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const teori = sesi.currentTheory;
+      const teks = teori
+        ? `💭 CURRENT THEORY\n\nCulprit: ${teori.culpritSuspectId ?? "-"}\nSupport: ${teori.support}`
+        : `💭 CURRENT THEORY\n\nBelum ada teori. Pilih suspect:`;
+      const kibord = bible.suspects.map((s) => [{ teks: `👤 ${s.name}`, data: `v1:theory:${s.suspectId}` }]);
+      kibord.push([{ teks: "← Main Board", data: "v1:hud" }]);
+      const interaktif = this.konfigurasi.pengirimInteraktif;
+      if (interaktif && messageId) {
+        await interaktif.suntingPesanKibord(chatId, messageId, teks, kibord);
+      } else if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, teks, kibord);
+      } else {
+        await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      }
+      await jawab();
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    } catch (error) {
+      await jawab("Tidak tersedia.");
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("Teori tidak tersedia."));
+    }
+  }
+
+  private async tampilkanPengajuanTuduhan(
+    groupId: IdGrup,
+    chatId: string,
+    updateId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const sesi = await this.ambilSesiAktifGrup(groupId);
+    if (!sesi) {
+      await jawab("Tidak ada sesi aktif.");
+      return berhasil({ command: "callback", message: "Tidak ada sesi aktif." });
+    }
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const proposal = sesi.accusationProposal;
+      const teks = proposal
+        ? `⚖️ ACCUSATION PROPOSAL\n\n${proposal.suspectId}\nYES: ${proposal.votes.length}/${sesi.playerIds.length}\nStatus: ${proposal.status}`
+        : `⚖️ ACCUSATION\n\nPilih suspect:`;
+      const kibord: KibordInlineTelegram = proposal
+        ? kibordVote(true)
+        : [...bible.suspects.map((s) => [{ teks: `👤 ${s.name}`, data: `v1:accuse:${s.suspectId}` }]), [{ teks: "← Main Board", data: "v1:hud" }]];
+      const interaktif = this.konfigurasi.pengirimInteraktif;
+      if (interaktif && messageId) {
+        await interaktif.suntingPesanKibord(chatId, messageId, teks, kibord);
+      } else if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, teks, kibord);
+      } else {
+        await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+      }
+      await jawab();
+      return berhasil({ command: "callback", message: teks, session: sesi });
+    } catch (error) {
+      await jawab("Tidak tersedia.");
+      return gagal(error instanceof Error ? error : new KesalahanValidasi("Accusation tidak tersedia."));
+    }
+  }
+
+  private async refreshVoteBoard(chatId: string, messageId: number, sesi: SesiKasus): Promise<void> {
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (!interaktif) return;
+    const proposal = sesi.accusationProposal;
+    if (!proposal) return;
+    const teks = `⚖️ ACCUSATION PROPOSAL\n\n${proposal.suspectId}\nYES: ${proposal.votes.length}\nStatus: ${proposal.status}`;
+    await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordVote(true));
+  }
+
+  private async tampilkanKonfirmasiFinalisasi(
+    chatId: string,
+    updateId: string,
+    messageId: number | undefined,
+    jawab: (teks?: string) => Promise<void>,
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    const teks = `⚠️ FINAL ACCUSATION\n\nKeputusan ini FINAL. Bila salah, case gagal.`;
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (interaktif && messageId) {
+      await interaktif.suntingPesanKibord(chatId, messageId, teks, kibordKonfirmasiFinalisasi());
+    } else if (interaktif) {
+      await interaktif.kirimPesanKibord(chatId, teks, kibordKonfirmasiFinalisasi());
+    } else {
+      await this.kirimPesanAman(chatId, teks, { command: "callback", updateId });
+    }
+    await jawab();
+    return berhasil({ command: "callback", message: teks });
   }
 
   private async validasiAdmin(userId: IdPemain, groupId: IdGrup): Promise<boolean> {
