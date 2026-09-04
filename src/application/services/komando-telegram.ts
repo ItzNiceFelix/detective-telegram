@@ -6,8 +6,8 @@ import type { KejadianDomain, KontrakIdempoten } from "../../event/domain.js";
 import { validasiInputTelegram, amanUntukMutasiGame } from "../../security/audit.js";
 import { KesalahanAutorisasi, KesalahanIdempoten, KesalahanValidasi } from "../../fondasi/eror.js";
 import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
-import { buatIdEvent, buatIdGrup, buatIdSesiKasus, type IdEvent, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
-import type { VersiKasus } from "../../kasus/versi-kasus.js";
+import { buatIdEvent, buatIdGrup, buatIdKasus, buatIdSesiKasus, buatIdVersiKasus, type IdEvent, type IdGrup, type IdKasus, type IdPemain, type IdSesiKasus, type IdVersiKasus, type WaktuIso } from "../../fondasi/primitif.js";
+import { StatusVersiKasus, publikasiVersiKasus, type VersiKasus } from "../../kasus/versi-kasus.js";
 import type { PermintaanTelegram } from "../../infrastructure/adapters/telegram/telegram.js";
 import type { KontrakRepositoriCaseBible } from "../../kasus/case-bible-repository.js";
 import type { CaseBible, MaksudInterogasi, PeristiwaLinimasa } from "../../kasus/case-bible.js";
@@ -16,10 +16,13 @@ import type { LayananInterogasiKasus } from "../../application/services/interoga
 import type { LayananResolusiKasus } from "../../application/services/resolusi-kasus.js";
 import type { PintuRendererNaratif } from "../../domain/services/renderer-naratif.js";
 import { renderDaftarObjek, renderHasilPeriksaObjek } from "./render-investigasi.js";
+import type { BenihKasus, KandidatKasus, OpsiGenerasiKasus } from "../../kasus/generasi-kasus.js";
+import type { ManifestAsetVisual, VisualPlan } from "../../ai/visual-pipeline.js";
 
 export interface RepositoriVersiKasusTelegram {
   ambilVersiKasus?: (caseId?: IdKasus, versionId?: IdVersiKasus) => Promise<VersiKasus | null>;
   ambilVersiKasusTerbitan?: () => Promise<VersiKasus | null>;
+  simpanVersiKasus?: (versi: VersiKasus) => Promise<VersiKasus>;
 }
 
 export interface RepositoriSesiKasusTelegram {
@@ -69,6 +72,16 @@ export interface KonfigurasiKomandoTelegram {
   layananResolusi?: LayananResolusiKasus;
   rendererNaratif?: PintuRendererNaratif;
   logger?: LoggerKomandoTelegram;
+
+  /** Production/admin flow: generate case + human-in-the-loop asset tasks. */
+  layananProduksiKasus?: { generateCase(seed: BenihKasus, opsi?: OpsiGenerasiKasus): Promise<KandidatKasus> };
+  layananTugasAset?: {
+    buatTugasAset(caseId: string, caseVersionId: string, plan: VisualPlan): Promise<{ taskId: string }>;
+    kirimTugasAset(taskId: string): Promise<{ taskId: string; status: string }>;
+    verifikasiTugasAset(taskId: string): Promise<{ taskId: string; status: string }>;
+    tolakTugasAset(taskId: string, reason: string): Promise<{ taskId: string; status: string }>;
+  };
+  repositoriAsetVisualProduksi?: { ambilManifest(caseId: string): Promise<ManifestAsetVisual | null> };
 }
 
 export interface HasilPerintahTelegram {
@@ -235,6 +248,22 @@ export class KomandoTelegramLayanan {
         if (!validasiArg.valid) {
           return gagal(new KesalahanValidasi(validasiArg.alasan ?? "argumen tidak valid"));
         }
+      }
+
+      // ====== PRODUCTION / ADMIN COMMANDS (admin-only) ======
+      // TELEGRAM_BETA human-in-the-loop: generate case → push asset task ke
+      // grup aset → admin gambar di vault → verifikasi → publish. Only admin.
+      if (command === "/generatecase") {
+        return await this.generateCaseAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
+      }
+      if (command === "/publishcase") {
+        return await this.publishCaseAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
+      }
+      if (command === "/verifytask") {
+        return await this.verifyTaskAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
+      }
+      if (command === "/rejecttask") {
+        return await this.rejectTaskAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
       }
 
       if (command === "/investigate") {
@@ -1067,6 +1096,255 @@ export class KomandoTelegramLayanan {
   }
 }
 
+  /** Guard admin untuk command produksi (creator/administrator) — kirim pesan bila ditolak. */
+  private async pastikanAdminGrup(
+    userId: IdPemain,
+    groupId: IdGrup,
+    chatId: string,
+    command: string,
+    updateId: string,
+  ): Promise<boolean> {
+    const admin = await this.validasiAdmin(userId, groupId);
+    if (!admin) {
+      const pesan = "Perintah ini khusus admin grup.";
+      await this.kirimPesanAman(chatId, pesan, { command, updateId });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * /generatecase — ADMIN: generate case baru (AI) + buat & kirim AssetTask ke
+   * grup aset (TELEGRAM_BETA human-in-the-loop). Kandidat disimpan DRAFT;
+   * publish hanya setelah semua task diverifikasi (lihat /publishcase).
+   */
+  private async generateCaseAdmin(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    argumen: string[],
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    if (!(await this.pastikanAdminGrup(userId, groupId, chatId, "/generatecase", updateId))) {
+      return berhasil({ command: "/generatecase", message: "Perintah ini khusus admin grup." });
+    }
+
+    const produksi = this.konfigurasi.layananProduksiKasus;
+    const tugasAset = this.konfigurasi.layananTugasAset;
+    if (!produksi || !tugasAset) {
+      const pesan = "Fitur generate case belum dikonfigurasi pada bot ini.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/generatecase", updateId });
+      return berhasil({ command: "/generatecase", message: pesan });
+    }
+
+    const genre = argumen[0] ? String(argumen[0]).slice(0, MAKS_PANJANG_ARGUMEN) : "mystery";
+    const sceneCountParsed = Number(argumen[1]);
+    const sceneCount = Number.isInteger(sceneCountParsed) && sceneCountParsed >= 1 && sceneCountParsed <= 6 ? sceneCountParsed : 2;
+    const seed: BenihKasus = {
+      genre,
+      setting: "a secluded private location",
+      difficulty: "MEDIUM",
+      suspectCount: 3,
+      sceneCount,
+      mustUseMechanics: [],
+    };
+
+    await this.kirimPesanAman(chatId, "⏳ Membuat case baru (AI)… ini bisa butuh beberapa menit.", { command: "/generatecase", updateId });
+
+    let kandidat: KandidatKasus;
+    try {
+      kandidat = await produksi.generateCase(seed);
+    } catch (error) {
+      const pesan = `⚠️ Generate case gagal: ${error instanceof Error ? error.message || error.name : String(error)}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/generatecase", updateId });
+      return berhasil({ command: "/generatecase", message: pesan });
+    }
+
+    const plans = turunanVisualPlanDariKasus(kandidat.caseBible);
+    const terkirim: string[] = [];
+    let gagalKirim = 0;
+    for (const plan of plans) {
+      try {
+        const tBaru = await tugasAset.buatTugasAset(kandidat.caseId, kandidat.versionId, plan);
+        const tKirim = await tugasAset.kirimTugasAset(tBaru.taskId);
+        terkirim.push(`• ${tKirim.taskId} — ${plan.purpose} (${plan.sceneId})`);
+      } catch (error) {
+        gagalKirim += 1;
+        this.konfigurasi.logger?.warn?.("asset task gagal dikirim", {
+          caseId: kandidat.caseId,
+          planId: plan.planId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const pesan = [
+      `✅ Case dibuat: ${kandidat.metadata?.title ?? kandidat.caseId}`,
+      `CaseId: ${kandidat.caseId}`,
+      `VersionId: ${kandidat.versionId}`,
+      ``,
+      `🧩 ${terkirim.length} asset task dikirim ke grup aset${gagalKirim > 0 ? ` (${gagalKirim} gagal)` : ""}.`,
+      ``,
+      `Langkah berikutnya:`,
+      `1) Di grup aset, balas tiap pesan [ASSET TASK] dengan gambar.`,
+      `2) Verifikasi tiap task: /verifytask <taskId>`,
+      `   (tolak: /rejecttask <taskId> <alasan>)`,
+      `3) Publish: /publishcase ${kandidat.caseId} ${kandidat.versionId}`,
+    ].join("\n");
+    await this.kirimPesanAman(chatId, pesan, { command: "/generatecase", updateId });
+    return berhasil({ command: "/generatecase", message: pesan });
+  }
+
+  /** /publishcase <caseId> <versionId> — ADMIN: publish DRAFT setelah aset siap. */
+  private async publishCaseAdmin(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    argumen: string[],
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    if (!(await this.pastikanAdminGrup(userId, groupId, chatId, "/publishcase", updateId))) {
+      return berhasil({ command: "/publishcase", message: "Perintah ini khusus admin grup." });
+    }
+
+    const caseId = argumen[0] ?? "";
+    const versionId = argumen[1] ?? "";
+    if (!caseId || !versionId) {
+      const pesan = "Format: /publishcase <caseId> <versionId>";
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+
+    const repositori = this.konfigurasi.repositoriVersiKasus;
+    if (!repositori.ambilVersiKasus || !repositori.simpanVersiKasus) {
+      const pesan = "Repositori versi kasus tidak tersedia untuk publikasi.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+
+    const versi = await repositori.ambilVersiKasus(buatIdKasus(caseId), buatIdVersiKasus(versionId));
+    if (!versi) {
+      const pesan = `CaseVersion tidak ditemukan: ${caseId} ${versionId}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+    if (versi.status === StatusVersiKasus.PUBLISHED) {
+      const pesan = `Case ${caseId} ${versionId} sudah dipublish (idempotent).`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+    if (versi.status === StatusVersiKasus.DISABLED) {
+      const pesan = "CaseVersion dinonaktifkan — tidak dapat dipublish.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+
+    const kandidatAi = versi.contentSummary.startsWith("Generated case:");
+    if (kandidatAi) {
+      const repoAset = this.konfigurasi.repositoriAsetVisualProduksi;
+      if (!repoAset) {
+        const pesan = "Repositori aset visual tidak tersedia untuk validasi.";
+        await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+        return berhasil({ command: "/publishcase", message: pesan });
+      }
+      const manifest = await repoAset.ambilManifest(caseId);
+      if (!manifest || manifest.assets.length === 0) {
+        const pesan = "Aset belum lengkap — selesaikan semua asset task di grup aset lalu verifikasi sebelum publish.";
+        await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+        return berhasil({ command: "/publishcase", message: pesan });
+      }
+      const asetTakValid = manifest.assets.find(
+        (aset) => !aset.uri || aset.uri.trim() === "" || aset.status === "UNAVAILABLE" || !aset.verifiedAt,
+      );
+      if (asetTakValid) {
+        const pesan = `Terdapat asset tanpa reference valid / belum VERIFIED (${asetTakValid.assetId}) — tidak dapat dipublish.`;
+        await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+        return berhasil({ command: "/publishcase", message: pesan });
+      }
+    }
+
+    try {
+      const versiTerbit = publikasiVersiKasus(versi, this.konfigurasi.waktu.sekarangIso());
+      await repositori.simpanVersiKasus(versiTerbit);
+      const pesan = `✅ Case dipublish: ${versiTerbit.caseId} ${versiTerbit.versionId}. Sekarang /newcase bisa dipakai di grup ini.`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    } catch (error) {
+      const pesan = `Publish gagal: ${error instanceof Error ? error.message : String(error)}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/publishcase", updateId });
+      return berhasil({ command: "/publishcase", message: pesan });
+    }
+  }
+
+  /** /verifytask <taskId> — ADMIN: verifikasi asset task yang sudah di-gambar. */
+  private async verifyTaskAdmin(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    argumen: string[],
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    if (!(await this.pastikanAdminGrup(userId, groupId, chatId, "/verifytask", updateId))) {
+      return berhasil({ command: "/verifytask", message: "Perintah ini khusus admin grup." });
+    }
+    const taskId = argumen[0] ?? "";
+    if (!taskId) {
+      const pesan = "Format: /verifytask <taskId>";
+      await this.kirimPesanAman(chatId, pesan, { command: "/verifytask", updateId });
+      return berhasil({ command: "/verifytask", message: pesan });
+    }
+    if (!this.konfigurasi.layananTugasAset) {
+      const pesan = "Layanan asset task tidak tersedia.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/verifytask", updateId });
+      return berhasil({ command: "/verifytask", message: pesan });
+    }
+    try {
+      const t = await this.konfigurasi.layananTugasAset.verifikasiTugasAset(taskId);
+      const pesan = `✅ Task ${t.taskId} → ${t.status}.`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/verifytask", updateId });
+      return berhasil({ command: "/verifytask", message: pesan });
+    } catch (error) {
+      const pesan = `Verifikasi ditolak: ${error instanceof Error ? error.message : String(error)}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/verifytask", updateId });
+      return berhasil({ command: "/verifytask", message: pesan });
+    }
+  }
+
+  /** /rejecttask <taskId> <alasan…> — ADMIN: tolak task, kembali menunggu admin. */
+  private async rejectTaskAdmin(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    argumen: string[],
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    if (!(await this.pastikanAdminGrup(userId, groupId, chatId, "/rejecttask", updateId))) {
+      return berhasil({ command: "/rejecttask", message: "Perintah ini khusus admin grup." });
+    }
+    const taskId = argumen[0] ?? "";
+    if (!taskId) {
+      const pesan = "Format: /rejecttask <taskId> <alasan>";
+      await this.kirimPesanAman(chatId, pesan, { command: "/rejecttask", updateId });
+      return berhasil({ command: "/rejecttask", message: pesan });
+    }
+    if (!this.konfigurasi.layananTugasAset) {
+      const pesan = "Layanan asset task tidak tersedia.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/rejecttask", updateId });
+      return berhasil({ command: "/rejecttask", message: pesan });
+    }
+    const alasan = argumen.slice(1).join(" ").trim() || "tanpa alasan";
+    try {
+      const t = await this.konfigurasi.layananTugasAset.tolakTugasAset(taskId, alasan);
+      const pesan = `🔁 Task ${t.taskId} ditolak → ${t.status}.`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/rejecttask", updateId });
+      return berhasil({ command: "/rejecttask", message: pesan });
+    } catch (error) {
+      const pesan = `Penolakan ditolak: ${error instanceof Error ? error.message : String(error)}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/rejecttask", updateId });
+      return berhasil({ command: "/rejecttask", message: pesan });
+    }
+  }
+
   private async validasiAdmin(userId: IdPemain, groupId: IdGrup): Promise<boolean> {
     const validatorAdmin = this.konfigurasi.validasiAdminGrup;
     if (validatorAdmin) {
@@ -1075,6 +1353,38 @@ export class KomandoTelegramLayanan {
 
     return this.konfigurasi.validasiAksesTelegram(String(userId), String(groupId));
   }
+}
+
+/** Turunkan VisualPlan[] minimal dari Case Bible agar tiap scene punya asset. */
+function turunanVisualPlanDariKasus(caseBible: CaseBible): VisualPlan[] {
+  const objekPerAdegan = new Map<string, CaseBible["objects"]>();
+  for (const objek of caseBible.objects) {
+    const daftar = objekPerAdegan.get(objek.sceneId) ?? [];
+    daftar.push(objek);
+    objekPerAdegan.set(objek.sceneId, daftar);
+  }
+
+  return caseBible.scenes.map((adegan) => {
+    const objs = objekPerAdegan.get(adegan.sceneId) ?? [];
+    const objekBerbukti = objs.filter((o) => o.evidenceId);
+    const requiredClues: VisualPlan["requiredClues"] =
+      objekBerbukti.length > 0
+        ? objekBerbukti.map((o) => ({ id: o.evidenceId as string, label: o.name, entityId: o.objectId, kind: "object" }))
+        : objs.length > 0
+          ? objs.map((o) => ({ id: o.objectId, label: o.name, entityId: o.objectId, kind: "object" }))
+          : [{ id: adegan.sceneId, label: adegan.name, entityId: adegan.sceneId, kind: "scene" }];
+
+    return {
+      planId: `PLAN-${adegan.sceneId}`,
+      sceneId: adegan.sceneId,
+      purpose: "CRIME_SCENE",
+      requiredClues,
+      forbiddenClues: [],
+      inspectableObjects: objs.map((o) => o.objectId),
+      compositionNotes: [`Scene: ${adegan.name}`],
+      styleConstraints: ["no text overlays", "no letters or words in the image", "cinematic investigative lighting"],
+    };
+  });
 }
 
 function buatIdPemain(value: string): IdPemain {

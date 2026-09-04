@@ -280,7 +280,10 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
 
   const konfigurasiLayanan: KonfigurasiKomandoTelegram = {
     repositoriVersiKasus: {
+      ambilVersiKasus: (caseId, versionId) =>
+        caseId && versionId ? repositoriVersiKasus.ambilVersiKasus(caseId, versionId) : Promise.resolve(null),
       ambilVersiKasusTerbitan: () => repositoriVersiKasus.ambilVersiKasusTerbitan(),
+      simpanVersiKasus: (versi) => repositoriVersiKasus.simpanVersiKasus(versi),
     },
     repositoriSesiKasus,
     repositoriGrup,
@@ -297,6 +300,14 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     layananResolusi,
     rendererNaratif,
     logger,
+    layananProduksiKasus: { generateCase: (seed, opsi) => layananProduksiKasus.generateCase(seed, opsi) },
+    layananTugasAset: {
+      buatTugasAset: (caseId, caseVersionId, plan) => layananTugasAset.buatTugasAset(caseId, caseVersionId, plan),
+      kirimTugasAset: (taskId) => layananTugasAset.kirimTugasAset(taskId),
+      verifikasiTugasAset: (taskId) => layananTugasAset.verifikasiTugasAset(taskId),
+      tolakTugasAset: (taskId, reason) => layananTugasAset.tolakTugasAset(taskId, reason),
+    },
+    repositoriAsetVisualProduksi: { ambilManifest: (caseId) => repositoriAsetVisual.ambilManifest(caseId) },
   };
 
   const layananKomando = new KomandoTelegramLayanan(konfigurasiLayanan);

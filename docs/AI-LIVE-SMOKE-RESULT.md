@@ -89,3 +89,12 @@ Lalu jalankan ulang:
 ```bash
 npx tsx tests/smoke-ai-live.ts
 ```
+
+---
+
+## Catatan: Telegram Asset Vault Live Smoke
+
+Untuk smoke **human-in-the-loop** (asset via Telegram vault), lihat
+**`docs/TELEGRAM-ASSET-LIVE-SMOKE.md`**. Status terpisah dan jujur:
+**`LIVE_TELEGRAM_ASSET_SMOKE = FAIL`** (belum dieksekusi — precheck
+`TELEGRAM_SECRET` kurang + langkah manusia/webhook tidak dapat dijalankan dari shell).
