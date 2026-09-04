@@ -56,6 +56,13 @@ export async function handlerInternal(
   const keamananWebhook = validasiWebhookSecret(headerToken, envSecret);
 
   if (!keamananWebhook.valid) {
+    console.error(JSON.stringify({
+      level: "error",
+      message: "webhook_secret_mismatch",
+      alasan: keamananWebhook.alasan,
+      hasHeader: Boolean(headerToken),
+      hasEnvSecret: Boolean(envSecret),
+    }));
     return {
       status: 401,
       body: JSON.stringify({ ok: false, error: keamananWebhook.alasan ?? "unauthorized: invalid telegram secret" }),
@@ -66,6 +73,7 @@ export async function handlerInternal(
   const rateKey = ambilHeaderNilaiTunggal(request.headers?.["x-forwarded-for"]) || ambilHeaderNilaiTunggal(request.headers?.["x-real-ip"]) || "telegram-global";
   const hasilRate = komposisi.penghitungBatasKejadian.periksa(rateKey);
   if (!hasilRate.diizinkan) {
+    console.warn(JSON.stringify({ level: "warn", message: "rate_limited", rateKey }));
     return {
       status: 429,
       body: JSON.stringify({ ok: false, error: "rate limited" }),
@@ -76,7 +84,8 @@ export async function handlerInternal(
   if (typeof request.body === "string") {
     try {
       payload = JSON.parse(request.body);
-    } catch {
+    } catch (e) {
+      console.error(JSON.stringify({ level: "error", message: "invalid_json_payload", error: e instanceof Error ? e.message : String(e) }));
       return {
         status: 400,
         body: JSON.stringify({ ok: false, error: "invalid json payload" }),
@@ -85,11 +94,14 @@ export async function handlerInternal(
   } else if (request.body && typeof request.body === "object") {
     payload = request.body;
   } else {
+    console.error(JSON.stringify({ level: "error", message: "empty_payload", bodyType: typeof request.body }));
     return {
       status: 400,
       body: JSON.stringify({ ok: false, error: "empty payload" }),
     };
   }
+
+  console.log(JSON.stringify({ level: "debug", message: "raw_payload_keys", keys: payload ? Object.keys(payload as object) : [] }));
 
   const update = komposisi.pengirimTelegram.parseUpdate(payload);
 
@@ -110,24 +122,29 @@ const punyaKonten = payload !== null && typeof payload === "object" &&
   ("message" in (payload as Record<string, unknown>) || "callback_query" in (payload as Record<string, unknown>));
 
 if (!update || !update.updateId) {
+  console.error(JSON.stringify({ level: "error", message: "invalid_update_id", payloadType: typeof payload }));
   return { status: 400, body: JSON.stringify({ ok: false, error: "invalid update_id" }) };
 }
 
 if (!punyaKonten) {
   // Update valid tapi tipe yang belum di-handle (my_chat_member, edited_message, dll)
   // — balas 200 supaya Telegram tidak menahan antrian dengan retry.
+  console.log(JSON.stringify({ level: "info", message: "ignored_update_type", payloadKeys: Object.keys(payload as object) }));
   return { status: 200, body: JSON.stringify({ ok: true, ignored: true }) };
 }
 
+  console.log(JSON.stringify({ level: "info", message: "processing_command", command: update.command, updateId: update.updateId }));
   const hasil = await komposisi.layananKomando.prosesUpdate(update);
 
   if (hasil.status === "berhasil") {
+    console.log(JSON.stringify({ level: "info", message: "command_success", command: hasil.data.command }));
     return {
       status: 200,
       body: JSON.stringify({ ok: true, command: hasil.data.command, message: hasil.data.message }),
     };
   }
 
+  console.error(JSON.stringify({ level: "error", message: "command_failed", command: update.command, error: hasil.error instanceof Error ? hasil.error.message : String(hasil.error) }));
   return {
     status: 200,
     body: JSON.stringify({ ok: false, error: hasil.error instanceof Error ? hasil.error.message : String(hasil.error) }),
