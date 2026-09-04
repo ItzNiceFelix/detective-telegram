@@ -1,12 +1,13 @@
 import type { Transaction } from "firebase-admin/firestore";
 import { KesalahanAutorisasi, KesalahanValidasi } from "../../fondasi/eror.js";
 import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
-import type { IdPemain, IdSesiKasus, WaktuIso } from "../../fondasi/primitif.js";
+import type { IdKasus, IdPemain, IdSesiKasus, IdVersiKasus, WaktuIso } from "../../fondasi/primitif.js";
 import type { SesiKasus } from "../../domain/entities.js";
 import type { KejadianDomain } from "../../event/domain.js";
 import { JenisKejadianDomain } from "../../event/domain.js";
 import type { KontrakRepositoriCaseBible } from "../../kasus/case-bible-repository.js";
 import type { CaseBible } from "../../kasus/case-bible.js";
+import type { VersiKasus } from "../../kasus/versi-kasus.js";
 import {
   selidikiAdegan,
   periksaObjek,
@@ -31,6 +32,7 @@ export interface PenyediaWaktuInvestigasi {
 export interface KonfigurasiLayananInvestigasi {
   repositoriSesi: RepositoriSesiInvestigasi;
   repositoriCaseBible: KontrakRepositoriCaseBible;
+  repositoriVersiKasus?: { ambilVersiKasus(caseId: IdKasus, versionId: IdVersiKasus): Promise<VersiKasus | null> };
   penerbitEventDomain: PenerbitEventInvestigasi;
   waktu: PenyediaWaktuInvestigasi;
 }
@@ -139,13 +141,18 @@ export class LayananInvestigasiKasus {
   /**
    * Case Bible bersifat immutable per CaseVersion sehingga aman dibaca di luar
    * transaction — sama seperti pembacaan CaseVersion published lainnya.
+   * Resolusi via VersiKasus.caseBibleRef (otoritatif); fallback konvensi
+   * `case-bible:{caseId}:golden` hanya bila repo versi tak tersedia/versi hilang.
    */
   private async ambilCaseBibleUntukSesi(sesi: SesiKasus): Promise<CaseBible> {
-    // NOTE: pemetaan caseVersionId -> caseBibleRef idealnya melalui
-    // RepositoriVersiKasus (Milestone 3). Milestone 5 hanya memiliki satu
-    // Golden Case fixture, jadi ref diturunkan langsung dari caseId sesi.
-    // TODO(Milestone 6+): resolve caseBibleRef melalui VersiKasus.caseBibleRef
-    // yang sesungguhnya, bukan konvensi string di sini.
+    const repoVersi = this.konfigurasi.repositoriVersiKasus;
+    if (repoVersi) {
+      const versi = await repoVersi.ambilVersiKasus(sesi.caseId as IdKasus, sesi.caseVersionId as IdVersiKasus);
+      if (versi?.caseBibleRef) {
+        const caseBible = await this.konfigurasi.repositoriCaseBible.ambilCaseBible(versi.caseBibleRef);
+        if (caseBible) return caseBible;
+      }
+    }
     const ref = `case-bible:${String(sesi.caseId)}:golden`;
     const caseBible = await this.konfigurasi.repositoriCaseBible.ambilCaseBible(ref);
 

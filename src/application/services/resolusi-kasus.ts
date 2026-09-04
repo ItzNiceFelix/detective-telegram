@@ -1,7 +1,8 @@
 import type { Transaction } from "firebase-admin/firestore";
 import { KesalahanAutorisasi, KesalahanValidasi } from "../../fondasi/eror.js";
 import { berhasil, gagal, type HasilOperasi } from "../../fondasi/hasil.js";
-import type { IdPemain, IdSesiKasus, WaktuIso } from "../../fondasi/primitif.js";
+import type { IdKasus, IdPemain, IdSesiKasus, IdVersiKasus, WaktuIso } from "../../fondasi/primitif.js";
+import type { VersiKasus } from "../../kasus/versi-kasus.js";
 import type { SesiKasus } from "../../domain/entities.js";
 import type { KejadianDomain } from "../../event/domain.js";
 import { JenisKejadianDomain } from "../../event/domain.js";
@@ -44,6 +45,7 @@ export interface RepositoriSnapshotResolusi {
 export interface KonfigurasiLayananResolusi {
   repositoriSesi: RepositoriSesiResolusi;
   repositoriCaseBible: KontrakRepositoriCaseBible;
+  repositoriVersiKasus?: { ambilVersiKasus(caseId: IdKasus, versionId: IdVersiKasus): Promise<VersiKasus | null> };
   repositoriKontribusi: RepositoriKontribusi;
   repositoriSnapshot: RepositoriSnapshotResolusi;
   penerbitEventDomain: PenerbitEventResolusi;
@@ -298,6 +300,14 @@ export class LayananResolusiKasus {
   }
 
   private async ambilCaseBibleUntukSesi(sesi: SesiKasus): Promise<CaseBible> {
+    const repoVersi = this.konfigurasi.repositoriVersiKasus;
+    if (repoVersi) {
+      const versi = await repoVersi.ambilVersiKasus(sesi.caseId as IdKasus, sesi.caseVersionId as IdVersiKasus);
+      if (versi?.caseBibleRef) {
+        const caseBible = await this.konfigurasi.repositoriCaseBible.ambilCaseBible(versi.caseBibleRef);
+        if (caseBible) return caseBible;
+      }
+    }
     const ref = `case-bible:${String(sesi.caseId)}:golden`;
     const caseBible = await this.konfigurasi.repositoriCaseBible.ambilCaseBible(ref);
     if (!caseBible) throw new KesalahanValidasi("Case Bible tidak ditemukan untuk sesi ini.");

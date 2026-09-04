@@ -265,6 +265,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const layananInvestigasi = buatLayananInvestigasiKasus({
     repositoriSesi: repositoriSesiKasus,
     repositoriCaseBible,
+    repositoriVersiKasus: { ambilVersiKasus: (caseId, versionId) => repositoriVersiKasus.ambilVersiKasus(caseId, versionId) },
     penerbitEventDomain,
     waktu,
   });
@@ -272,6 +273,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const layananInterogasi = buatLayananInterogasiKasus({
     repositoriSesi: repositoriSesiKasus,
     repositoriCaseBible,
+    repositoriVersiKasus: { ambilVersiKasus: (caseId, versionId) => repositoriVersiKasus.ambilVersiKasus(caseId, versionId) },
     penerbitEventDomain,
     waktu,
     renderer: rendererNaratif,
@@ -280,6 +282,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const layananResolusi = buatLayananResolusiKasus({
     repositoriSesi: repositoriSesiKasus,
     repositoriCaseBible,
+    repositoriVersiKasus: { ambilVersiKasus: (caseId, versionId) => repositoriVersiKasus.ambilVersiKasus(caseId, versionId) },
     repositoriKontribusi,
     repositoriSnapshot: repositoriSnapshotResolusi,
     penerbitEventDomain,

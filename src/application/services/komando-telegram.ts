@@ -755,6 +755,14 @@ export class KomandoTelegramLayanan {
 
   private async ambilCaseBibleUntukSesi(sesi: SesiKasus): Promise<CaseBible> {
     const repositori = this.ambilLayanan(this.konfigurasi.repositoriCaseBible, "repositoriCaseBible");
+    const repoVersi = this.konfigurasi.repositoriVersiKasus;
+    if (repoVersi.ambilVersiKasus) {
+      const versi = await repoVersi.ambilVersiKasus(sesi.caseId, sesi.caseVersionId);
+      if (versi?.caseBibleRef) {
+        const caseBible = await repositori.ambilCaseBible(versi.caseBibleRef);
+        if (caseBible) return caseBible;
+      }
+    }
     const ref = `case-bible:${String(sesi.caseId)}:golden`;
     const caseBible = await repositori.ambilCaseBible(ref);
     if (!caseBible) {
@@ -843,6 +851,8 @@ export class KomandoTelegramLayanan {
     try {
       caseBible = await this.ambilCaseBibleUntukSesi(konteks.sesi);
     } catch (error) {
+      const pesanGagal = error instanceof Error ? error.message : "Case Bible tidak tersedia.";
+      await this.kirimPesanAman(chatId, pesanGagal, { command: "/suspects", updateId, sessionId: String(konteks.sesi.sessionId) });
       return gagal(error instanceof Error ? error : new KesalahanValidasi("Case Bible tidak tersedia."));
     }
 
