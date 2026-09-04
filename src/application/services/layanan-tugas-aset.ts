@@ -39,7 +39,7 @@ export interface KonfigurasiLayananTugasAset {
   vaultChatId: string | undefined;
   waktu: PenyediaWaktu;
   pembuatIdTugas: () => string;
-  kirimPesan: (chatId: string, text: string) => Promise<number>;
+  kirimPesan: (chatId: string, text: string, opsi?: { parseMode?: "Markdown" }) => Promise<number>;
   validasiAdminVault: (userId: string, chatId: string) => Promise<boolean>;
 }
 
@@ -82,13 +82,35 @@ export class LayananTugasAset {
     if (tugas.status === "WAITING_FOR_ADMIN" && tugas.telegramMessageId) return tugas;
 
     const ternavigasi = hubunganKirim(tugas);
-    const messageId = await this.cfg.kirimPesan(vault, bangunPesanTugas(ternavigasi));
+    const messageId = await this.cfg.kirimPesan(vault, bangunPesanTugas(ternavigasi), { parseMode: "Markdown" });
     const t2: TugasAset = {
       ...ternavigasi,
       status: "WAITING_FOR_ADMIN",
       telegramMessageId: String(messageId),
       updatedAt: this.cfg.waktu.sekarangIso(),
     };
+    await this.cfg.repositoriTugas.simpan(t2);
+    return t2;
+  }
+
+  /** Kirim ulang pesan task (misal pesan lama hilang/gagal). Kirim pesan baru + update messageId. */
+  async kirimUlangTugasAset(taskId: string): Promise<TugasAset> {
+    const vault = this.cfg.vaultChatId;
+    if (!vault) throw new KesalahanKonfigurasi("TELEGRAM_ASSET_VAULT_CHAT_ID belum dikonfigurasi.");
+    const tugas = await this.ambilTugasAset(taskId);
+    if (tugas.status === "VERIFIED") throw new KesalahanValidasi("AssetTask VERIFIED immutable; gunakan revisi/task baru.");
+
+    const ternavigasi = hubunganKirim({ ...tugas, status: tugas.status === "DRAFT" ? "DRAFT" : "WAITING_FOR_ADMIN" });
+    const messageId = await this.cfg.kirimPesan(vault, bangunPesanTugas(ternavigasi), { parseMode: "Markdown" });
+    const t2: TugasAset = {
+      ...ternavigasi,
+      status: "WAITING_FOR_ADMIN",
+      telegramMessageId: String(messageId),
+      updatedAt: this.cfg.waktu.sekarangIso(),
+    };
+    delete t2.telegramFileId;
+    delete t2.submittedAt;
+    delete t2.submittedBy;
     await this.cfg.repositoriTugas.simpan(t2);
     return t2;
   }
@@ -201,6 +223,7 @@ function hubunganKirim(tugas: TugasAset): TugasAset {
 }
 
 function bangunPesanTugas(t: TugasAset): string {
+  const promptAman = t.prompt.replace(/```/g, "'''");
   return [
     `[ASSET TASK] ${t.taskId}`,
     `Case: ${t.caseId}`,
@@ -209,7 +232,10 @@ function bangunPesanTugas(t: TugasAset): string {
     `Asset Type: ${t.assetType}`,
     `Required visual clues: ${t.requiredClues.join(", ") || "none"}`,
     ``,
-    `Prompt: ${t.prompt}`,
+    "Prompt (tap to copy):",
+    "```",
+    promptAman,
+    "```",
     ``,
     `Balas pesan ini dengan hasil gambar.`,
   ].join("\n");

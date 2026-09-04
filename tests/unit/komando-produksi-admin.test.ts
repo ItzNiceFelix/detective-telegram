@@ -218,3 +218,38 @@ test("/verifytask (admin) memanggil verifikasi task", async () => {
   assert.equal(hasil.status, "berhasil");
   assert.match(String(hasil.data.message), /VERIFIED/);
 });
+
+test("/resendtask (admin) kirim ulang pesan task ke vault", async () => {
+  const kirimUlangCalls: string[] = [];
+  const layanan = new KomandoTelegramLayanan({
+    repositoriVersiKasus: {
+      ambilVersiKasus: async () => buatVersiDraft(),
+      ambilVersiKasusTerbitan: async () => buatVersiDraft(),
+      simpanVersiKasus: async (v) => v,
+    },
+    repositoriSesiKasus: { ambil: async () => null, simpan: async (s) => s, transaksi: async (r) => r({ id: "t" } as never) },
+    repositoriGrup: { ambil: async (g) => ({ groupId: g ?? buatIdGrup("-1001"), telegramChatId: "-1001", createdAt: buatWaktuIso("2026-01-01T00:00:00.000Z"), status: "ACTIVE" as const }), simpan: async (g) => g },
+    penerbitEventDomain: { kirim: async () => undefined },
+    kontrakIdempoten: { ambilKunci: async () => null, simpanKunci: async () => undefined },
+    waktu: { sekarangIso: () => buatWaktuIso("2026-02-01T00:00:00.000Z") },
+    kirimPesanTelegram: async () => undefined,
+    validasiAksesTelegram: async () => true,
+    validasiGroupTelegram: async () => true,
+    validasiAdminGrup: async () => true,
+    layananProduksiKasus: { generateCase: async () => kandidat },
+    layananTugasAset: {
+      buatTugasAset: async () => ({ taskId: "t-1" }),
+      kirimTugasAset: async (t) => ({ taskId: t, status: "WAITING_FOR_ADMIN", telegramMessageId: "2" }),
+      kirimUlangTugasAset: async (t) => { kirimUlangCalls.push(t); return { taskId: t, status: "WAITING_FOR_ADMIN", telegramMessageId: "99" }; },
+      verifikasiTugasAset: async (t) => ({ taskId: t, status: "VERIFIED" }),
+      tolakTugasAset: async (t) => ({ taskId: t, status: "WAITING_FOR_ADMIN" }),
+    },
+    repositoriAsetVisualProduksi: { ambilManifest: async () => manifestValid },
+  });
+
+  const hasil = await layanan.prosesUpdate(updateAdmin("/resendtask task-PLAN-SCENE_A"));
+
+  assert.equal(hasil.status, "berhasil");
+  assert.match(String(hasil.data.message), /dikirim ulang/i);
+  assert.equal(kirimUlangCalls.length, 1);
+});

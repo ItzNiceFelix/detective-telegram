@@ -187,8 +187,10 @@ export class TelegramAdapter implements PintuTelegram {
    * Outbound Telegram sendMessage. Selalu dipanggil SETELAH commit Firestore
    * (PERSIST-07) — tidak pernah di dalam transaction. Kegagalan menghasilkan
    * KesalahanIntegrasi terstruktur; token tidak pernah masuk ke pesan error.
+   * parseMode "Markdown" dipakai pesan yang memuat code block (tap-to-copy);
+   * default tanpa parse_mode agar teks biasa tidak rusak oleh karakter Markdown.
    */
-  async kirimPesanTelegram(chatId: string, text: string): Promise<number> {
+  async kirimPesanTelegram(chatId: string, text: string, opsi?: { parseMode?: "Markdown" }): Promise<number> {
     if (!this.botToken) {
       throw new KesalahanKonfigurasi("TELEGRAM_BOT_TOKEN belum dikonfigurasi.");
     }
@@ -196,6 +198,7 @@ export class TelegramAdapter implements PintuTelegram {
     const data = (await this.panggilApiTelegram("sendMessage", {
       chat_id: chatId,
       text,
+      ...(opsi?.parseMode ? { parse_mode: opsi.parseMode } : {}),
     })) as ResponApiTelegram;
     const result = data.result as { message_id?: unknown } | undefined;
     const messageId = typeof result?.message_id === "number" ? result.message_id : 0;

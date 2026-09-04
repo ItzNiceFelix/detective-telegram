@@ -246,7 +246,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     vaultChatId,
     waktu,
     pembuatIdTugas: () => `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    kirimPesan: (chatId, text) => pengirimTelegram.kirimPesanTelegram(chatId, text),
+    kirimPesan: (chatId, text, opsi) => pengirimTelegram.kirimPesanTelegram(chatId, text, opsi),
     validasiAdminVault,
   });
 
@@ -343,6 +343,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     layananTugasAset: {
       buatTugasAset: (caseId, caseVersionId, plan) => layananTugasAset.buatTugasAset(caseId, caseVersionId, plan),
       kirimTugasAset: (taskId) => layananTugasAset.kirimTugasAset(taskId),
+      kirimUlangTugasAset: (taskId) => layananTugasAset.kirimUlangTugasAset(taskId),
       verifikasiTugasAset: (taskId) => layananTugasAset.verifikasiTugasAset(taskId),
       tolakTugasAset: (taskId, reason) => layananTugasAset.tolakTugasAset(taskId, reason),
     },

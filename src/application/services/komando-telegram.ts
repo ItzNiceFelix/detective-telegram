@@ -77,7 +77,8 @@ export interface KonfigurasiKomandoTelegram {
   layananProduksiKasus?: { generateCase(seed: BenihKasus, opsi?: OpsiGenerasiKasus): Promise<KandidatKasus> };
   layananTugasAset?: {
     buatTugasAset(caseId: string, caseVersionId: string, plan: VisualPlan): Promise<{ taskId: string }>;
-    kirimTugasAset(taskId: string): Promise<{ taskId: string; status: string }>;
+    kirimTugasAset(taskId: string): Promise<{ taskId: string; status: string; telegramMessageId?: string }>;
+    kirimUlangTugasAset?(taskId: string): Promise<{ taskId: string; status: string; telegramMessageId?: string }>;
     verifikasiTugasAset(taskId: string): Promise<{ taskId: string; status: string }>;
     tolakTugasAset(taskId: string, reason: string): Promise<{ taskId: string; status: string }>;
   };
@@ -268,6 +269,9 @@ export class KomandoTelegramLayanan {
       }
       if (command === "/rejecttask") {
         return await this.rejectTaskAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
+      }
+      if (command === "/resendtask") {
+        return await this.resendTaskAdmin(groupId, userId, chatId, permintaan.updateId, argumen);
       }
 
       if (command === "/investigate") {
@@ -1367,6 +1371,41 @@ export class KomandoTelegramLayanan {
       const pesan = `Penolakan ditolak: ${error instanceof Error ? error.message : String(error)}`;
       await this.kirimPesanAman(chatId, pesan, { command: "/rejecttask", updateId });
       return berhasil({ command: "/rejecttask", message: pesan });
+    }
+  }
+
+  /** /resendtask <taskId> — ADMIN: kirim ulang pesan task ke vault (mis. pesan lama hilang/gagal). */
+  private async resendTaskAdmin(
+    groupId: IdGrup,
+    userId: IdPemain,
+    chatId: string,
+    updateId: string,
+    argumen: string[],
+  ): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
+    if (!(await this.pastikanAdminGrup(userId, groupId, chatId, "/resendtask", updateId))) {
+      return berhasil({ command: "/resendtask", message: "Perintah ini khusus admin grup." });
+    }
+    const taskId = argumen[0] ?? "";
+    if (!taskId) {
+      const pesan = "Format: /resendtask <taskId>";
+      await this.kirimPesanAman(chatId, pesan, { command: "/resendtask", updateId });
+      return berhasil({ command: "/resendtask", message: pesan });
+    }
+    if (!this.konfigurasi.layananTugasAset) {
+      const pesan = "Layanan asset task tidak tersedia.";
+      await this.kirimPesanAman(chatId, pesan, { command: "/resendtask", updateId });
+      return berhasil({ command: "/resendtask", message: pesan });
+    }
+    try {
+      const svc = this.konfigurasi.layananTugasAset;
+      const t = svc.kirimUlangTugasAset ? await svc.kirimUlangTugasAset(taskId) : await svc.kirimTugasAset(taskId);
+      const pesan = `🔁 Task ${t.taskId} dikirim ulang ke vault (msg ${t.telegramMessageId ?? "-"}) → ${t.status}.`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/resendtask", updateId });
+      return berhasil({ command: "/resendtask", message: pesan });
+    } catch (error) {
+      const pesan = `Resend ditolak: ${error instanceof Error ? error.message : String(error)}`;
+      await this.kirimPesanAman(chatId, pesan, { command: "/resendtask", updateId });
+      return berhasil({ command: "/resendtask", message: pesan });
     }
   }
 
