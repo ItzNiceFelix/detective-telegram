@@ -15,6 +15,10 @@ export interface KonfigurasiTeksRuntime {
   provider: ProviderRuntimeTerpilih;
   model: string;
   baseUrl: string | undefined;
+  /** Model khusus prompt `dialogue` (runtime narrative); `undefined` → `model`. */
+  dialogueModel?: string | undefined;
+  /** Model khusus prompt `hint` (assistant detektif); `undefined` → `model`. */
+  hintModel?: string | undefined;
   /** Budget token input; `undefined` = tanpa enforcement input (default). */
   maxInputTokens?: number | undefined;
   maxOutputTokens: number;
@@ -163,6 +167,10 @@ export function validasiDanNormalisasiRuntime(raw: unknown): KonfigurasiRuntimeA
     throw new KesalahanKonfigurasi(`Provider tidak valid: ${String(textRaw.provider)}`);
   }
   const model = bacaStringTrim(textRaw.model, "gemini-flash-latest");
+  const dialogueModelRaw = typeof textRaw.dialogueModel === "string" ? textRaw.dialogueModel.trim() : "";
+  const hintModelRaw = typeof textRaw.hintModel === "string" ? textRaw.hintModel.trim() : "";
+  const dialogueModel = dialogueModelRaw.length > 0 ? dialogueModelRaw : undefined;
+  const hintModel = hintModelRaw.length > 0 ? hintModelRaw : undefined;
   const baseUrlRaw = typeof textRaw.baseUrl === "string" ? textRaw.baseUrl.trim() : "";
   const baseUrl = baseUrlRaw.length > 0 ? baseUrlRaw : undefined;
   if (baseUrl !== undefined) {
@@ -208,7 +216,7 @@ export function validasiDanNormalisasiRuntime(raw: unknown): KonfigurasiRuntimeA
   }
 
   return {
-    text: { enabled, provider, model, baseUrl, maxInputTokens, maxOutputTokens, maxRetries, timeoutMs, fallback },
+    text: { enabled, provider, model, baseUrl, dialogueModel, hintModel, maxInputTokens, maxOutputTokens, maxRetries, timeoutMs, fallback },
     runtimeNarrative: { enabled: typeof rnRaw.enabled === "boolean" ? rnRaw.enabled : false },
     assistant: { enabled: typeof asRaw.enabled === "boolean" ? asRaw.enabled : false },
     image: { enabled: typeof imRaw.enabled === "boolean" ? imRaw.enabled : false, mode: imageMode },

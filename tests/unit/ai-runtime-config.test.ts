@@ -365,6 +365,42 @@ test("13. concurrent reads → singleflight (1 fetch untuk N pembaca)", async ()
   }
 });
 
+test("A. model per-prompt: dialogue→dialogueModel, hint→hintModel, case_generation→model", async () => {
+  const tangkap: FetchTangkap = { urls: [], payloads: [] };
+  const cfg = cfgLengkap();
+  cfg.text.model = "casegen-model";
+  cfg.text.dialogueModel = "narrative-model";
+  cfg.text.hintModel = "assistant-model";
+  cfg.runtimeNarrative.enabled = true;
+  cfg.assistant.enabled = true;
+  const sumber = new SumberUji(cfg);
+  const router = buatRouter(sumber, { geminiApiKey: "K" }, 60_000, buatMockFetchGemini(tangkap));
+
+  await router.generateText({ promptType: "case_generation", context: {} });
+  await router.generateText({ promptType: "dialogue", context: {} });
+  await router.generateText({ promptType: "hint", context: {} });
+
+  const modelFields = tangkap.urls.map((u) => (u.match(/models\/([^:/?]+):/) ?? [])[1]);
+  assert.ok(modelFields[0] === "casegen-model", `case_generation memakai model default: ${modelFields[0]}`);
+  assert.ok(modelFields[1] === "narrative-model", `dialogue memakai dialogueModel: ${modelFields[1]}`);
+  assert.ok(modelFields[2] === "assistant-model", `hint memakai hintModel: ${modelFields[2]}`);
+});
+
+test("B. dialogueModel/hintModel kosong → fallback ke model utama", async () => {
+  const tangkap: FetchTangkap = { urls: [], payloads: [] };
+  const cfg = cfgLengkap();
+  cfg.text.model = "utama";
+  cfg.runtimeNarrative.enabled = true;
+  cfg.assistant.enabled = true;
+  const router = buatRouter(new SumberUji(cfg), { geminiApiKey: "K" }, 60_000, buatMockFetchGemini(tangkap));
+  for (const tipe of ["dialogue", "hint", "case_generation"] as const) {
+    await router.generateText({ promptType: tipe, context: {} });
+  }
+  for (const u of tangkap.urls) {
+    assert.ok(u.includes("models/utama:"), `tanpa override memakai model utama: ${u}`);
+  }
+});
+
 test("14. migrasi: env gemini+key tanpa Firestore → behavior lama utuh (model/flag/budget)", async () => {
   const router = new RouterAi({
     sumber: new SumberUji(null),

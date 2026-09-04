@@ -145,16 +145,24 @@ export class RouterAi implements PintuAi {
       cfg.text.maxOutputTokens,
     );
     const permintaanTerbatas: PermintaanAi = { ...request, maxTokens: maxOutputEfektif };
+    const model = this.modelUntukPrompt(request.promptType, cfg);
 
     try {
-      return await this.generateDenganProvider(cfg.text.provider, cfg.text.model, cfg, permintaanTerbatas);
+      return await this.generateDenganProvider(cfg.text.provider, model, cfg, permintaanTerbatas);
     } catch (error) {
       const fb = cfg.text.fallback;
-      if (fb && this.layakFallback(error) && (fb.provider !== cfg.text.provider || fb.model !== cfg.text.model)) {
+      if (fb && this.layakFallback(error) && (fb.provider !== cfg.text.provider || fb.model !== model)) {
         return this.generateDenganProvider(fb.provider, fb.model, cfg, permintaanTerbatas);
       }
       throw error;
     }
+  }
+
+  /** Model per-promptType: `dialogue`→dialogueModel, `hint`→hintModel, lainnya→model. */
+  private modelUntukPrompt(tipe: TipePrompt, cfg: KonfigurasiRuntimeAi): string {
+    if (tipe === "dialogue" && cfg.text.dialogueModel) return cfg.text.dialogueModel;
+    if (tipe === "hint" && cfg.text.hintModel) return cfg.text.hintModel;
+    return cfg.text.model;
   }
 
   private async generateDenganProvider(

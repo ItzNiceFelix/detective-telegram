@@ -104,10 +104,13 @@ Firestore (`ai_runtime_config/production`):
   "text": {
     "enabled": true,
     "provider": "xkiro",
-    "model": "<model-id-dari-/v1/models>",
+    "model": "<model-id-case-generation>",
+    "dialogueModel": "<model-id-runtime-narrative>",
+    "hintModel": "<model-id-assistant>",
+    "fallback": { "provider": "xkiro", "model": "<model-id-cadangan>" },
     "maxOutputTokens": 2400,
-    "maxRetries": 2,
-    "timeoutMs": 15000
+    "maxRetries": 1,
+    "timeoutMs": 60000
   },
   "caseGeneration": { "enabled": true },
   "runtimeNarrative": { "enabled": false },
@@ -115,6 +118,12 @@ Firestore (`ai_runtime_config/production`):
   "image": { "enabled": false, "mode": "HUMAN_IN_LOOP" }
 }
 ```
+
+**Lock production (2026-09-04, benchmark beban penuh case_generation):**
+`model=qwen/qwen3.5-flash:free` (JSON valid ~9.8s), `dialogueModel=hintModel=
+fallback.model=mistralai/ministral-3b` (JSON valid ~8.1s). Override per
+promptType opsional — kosong → pakai `text.model`. minimax*: coret (HTTP 200
+content kosong di semua varian, termasuk highspeed).
 
 Tanpa key di env untuk provider terpilih → `AUTHENTICATION` jelas
 (tanpa fallback diam-diam).
