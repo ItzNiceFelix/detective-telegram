@@ -108,3 +108,31 @@ export function teksHud(sesi: SesiKasus, caseBible: CaseBible): string {
   ];
   return baris.join("\n");
 }
+
+/**
+ * Narasi pembuka case — deterministik, HANYA dari data Case Bible aktual.
+ * Tanpa fakta inventaris: lokasi, korban, adegan, objek awal, waktu.
+ */
+export function teksPembukaKasus(sesi: SesiKasus, caseBible: CaseBible): string {
+  const adegan = caseBible.scenes.map((s) => s.name).join(", ") || "-";
+  const objekAwal = caseBible.objects
+    .filter((o) => o.modeDiscovery === "AUTO")
+    .slice(0, 5)
+    .map((o) => o.name)
+    .join(", ") || "-";
+  const waktuAwal = caseBible.timelineEvents
+    .map((e) => e.timestamp.start)
+    .filter((t): t is string => typeof t === "string" && t.length > 0)
+    .sort()[0];
+  return [
+    `🕵️ CASE ${String(sesi.caseId)}`,
+    caseBible.title.toUpperCase(),
+    ``,
+    waktuAwal ? `${waktuAwal}.` : ``,
+    `${caseBible.victim} ditemukan di ${adegan}.`,
+    ``,
+    `Awal yang terlihat: ${objekAwal}.`,
+    ``,
+    `${sesi.playerIds.length} detektif bertugas. Temukan apa yang terjadi.`,
+  ].filter((b) => b.length > 0).join("\n");
+}

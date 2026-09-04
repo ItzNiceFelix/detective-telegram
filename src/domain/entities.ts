@@ -66,6 +66,8 @@ export interface SesiKasus {
   finalAccusation?: TuduhanAkhir | null | undefined;
   contributionRecordIds?: string[] | undefined; // idempotency dedupe set, bounded (few dozen max)
   resolutionSnapshotRef?: string | undefined;
+  /** Presentation state: message_id HUD aktif (pin lifecycle). Bukan game truth. */
+  hudMessageId?: string | undefined;
 }
 
 export interface ObjekDapatDiperiksa {

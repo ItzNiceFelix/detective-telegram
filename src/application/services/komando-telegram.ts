@@ -33,6 +33,7 @@ import {
   kibordMaksudInterogasi,
   kibordVote,
   teksHud,
+  teksPembukaKasus,
 } from "../../telegram/kibord-game.js";
 
 export interface RepositoriVersiKasusTelegram {
@@ -727,7 +728,78 @@ export class KomandoTelegramLayanan {
       sessionId: String(sesiMulai.sessionId),
     });
 
+    // M3 — pengalaman buka case: narasi deterministik dari Case Bible aktual,
+    // lalu HUD utama (+ pin best-effort, simpan messageId untuk lifecycle).
+    await this.terbitkanPembukaDanHud(chatId, updateId, sesiMulai);
+
     return berhasil({ command: "/startcase", message: pesan, session: sesiMulai });
+  }
+
+  /**
+   * M3 — narasi pembuka + HUD utama + pin. Presentation-only: kegagalan tidak
+   * mengganggu status OPEN kanonik. HUD messageId disimpan di sesi untuk
+   * refresh/unpin lifecycle (best-effort).
+   */
+  private async terbitkanPembukaDanHud(
+    chatId: string,
+    updateId: string,
+    sesi: SesiKasus,
+  ): Promise<void> {
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    try {
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      const pembuka = teksPembukaKasus(sesi, bible);
+      if (interaktif) {
+        await interaktif.kirimPesanKibord(chatId, pembuka, []);
+      } else {
+        await this.kirimPesanAman(chatId, pembuka, { command: "/startcase", updateId });
+      }
+      const hud = teksHud({ ...sesi, status: StatusSesi.OPEN }, bible);
+      if (interaktif) {
+        const hudId = await interaktif.kirimPesanKibord(chatId, hud, kibordHudUtama());
+        try {
+          await interaktif.sematkanPesan(chatId, hudId);
+        } catch {
+          // pin gagal (mis. tanpa izin) → HUD tetap ada, game jalan
+        }
+        try {
+          await this.konfigurasi.repositoriSesiKasus.simpan({ ...sesi, hudMessageId: String(hudId) });
+        } catch {
+          // simpan HUD id best-effort
+        }
+      } else {
+        await this.kirimPesanAman(chatId, hud, { command: "/startcase", updateId });
+      }
+    } catch {
+      // narasi/HUD best-effort — status OPEN sudah kanonik
+    }
+  }
+
+  /** M3 — refresh HUD bila ada hudMessageId (best-effort edit, tanpa crash). */
+  private async refreshHud(groupId: IdGrup, chatId: string): Promise<void> {
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (!interaktif) return;
+    try {
+      const sesi = await this.ambilSesiAktifGrup(groupId);
+      if (!sesi?.hudMessageId) return;
+      const bible = await this.ambilCaseBibleUntukSesi(sesi);
+      await interaktif.suntingPesanKibord(chatId, Number(sesi.hudMessageId), teksHud(sesi, bible), kibordHudUtama());
+    } catch {
+      // best-effort
+    }
+  }
+
+  /** M3 — unpin HUD saat terminal (best-effort, bukan game state). */
+  private async lucutiHud(groupId: IdGrup, chatId: string): Promise<void> {
+    const interaktif = this.konfigurasi.pengirimInteraktif;
+    if (!interaktif) return;
+    try {
+      const sesi = await this.ambilSesiAktifGrup(groupId);
+      if (!sesi?.hudMessageId) return;
+      await interaktif.lucutiSematPesan(chatId, Number(sesi.hudMessageId));
+    } catch {
+      // best-effort
+    }
   }
 
   private async tampilkanStatus(groupId: IdGrup, chatId: string, updateId: string): Promise<HasilOperasi<HasilPerintahTelegram, Error>> {
@@ -841,13 +913,15 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananInvestigasi, "layananInvestigasi");
     const hasil = await layanan.prosesInvestigasiAdegan({ sessionId: konteks.sesi.sessionId, userId, sceneId });
-    return this.kirimHasilGameplay("/investigate", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/investigate", chatId, updateId, konteks.sesi, hasil, (data) => {
       if (data.objekTampak.length === 0) {
         return `🔎 Adegan ${sceneId}\n\nTidak ada objek yang terlihat saat ini.`;
       }
       const daftar = data.objekTampak.map((objek) => `• ${objek.objectId} — ${objek.name}`).join("\n");
       return `🔎 Adegan ${sceneId}\n\n${daftar}\n\nGunakan /inspect <objectId> untuk memeriksa.`;
     });
+    if (hasil.status === "berhasil") await this.refreshHud(groupId, chatId);
+    return out;
   }
 
   private async lakukanPeriksa(
@@ -864,11 +938,13 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananInvestigasi, "layananInvestigasi");
     const hasil = await layanan.prosesPeriksaObjek({ sessionId: konteks.sesi.sessionId, userId, objectId });
-    return this.kirimHasilGameplay("/inspect", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/inspect", chatId, updateId, konteks.sesi, hasil, (data) => {
       const bukti = data.evidenceBaruDitemukan && data.evidenceId ? `\n\n✅ Evidence ditemukan: ${data.evidenceId}` : "";
       const sudah = data.sudahDiperiksaSebelumnya ? "\n\n(Sudah diperiksa sebelumnya.)" : "";
       return `${data.observasi.text}${bukti}${sudah}`;
     });
+    if (hasil.status === "berhasil" && hasil.data.evidenceBaruDitemukan) await this.refreshHud(groupId, chatId);
+    return out;
   }
 
   private async tampilkanTersangka(
@@ -916,7 +992,7 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananInterogasi, "layananInterogasi");
     const hasil = await layanan.prosesInterogasi({ sessionId: konteks.sesi.sessionId, userId, suspectId, maksud });
-    return this.kirimHasilGameplay("/interrogate", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/interrogate", chatId, updateId, konteks.sesi, hasil, (data) => {
       const statusUnlock = data.statementBaruDiunlock
         ? "\n\n📌 Statement baru ter-unlock."
         : data.nodeBaruDiunlock
@@ -926,6 +1002,10 @@ export class KomandoTelegramLayanan {
             : "";
       return `${data.responseText}${statusUnlock}`;
     });
+    if (hasil.status === "berhasil" && (hasil.data.statementBaruDiunlock || hasil.data.nodeBaruDiunlock)) {
+      await this.refreshHud(groupId, chatId);
+    }
+    return out;
   }
 
   private async lakukanKonfrontasi(
@@ -945,12 +1025,16 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananInterogasi, "layananInterogasi");
     const hasil = await layanan.prosesKonfrontasi({ sessionId: konteks.sesi.sessionId, userId, suspectId, evidenceId });
-    return this.kirimHasilGameplay("/confront", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/confront", chatId, updateId, konteks.sesi, hasil, (data) => {
       const bagianBaru = data.kontradiksiBaruDitemukan ? `\n\n🔥 Kontradiksi ditemukan: ${data.contradictionId}` : "";
       const timeline = data.timelineBaruDiketahui ? "\n\n🗓️ Informasi timeline baru terungkap." : "";
       const sudah = data.sudahDikonfrontasiSebelumnya ? "\n\n(Sudah dikonfrontasi sebelumnya.)" : "";
       return `${suspectId} dikonfrontasi dengan ${evidenceId}.${bagianBaru}${timeline}${sudah}`;
     });
+    if (hasil.status === "berhasil" && (hasil.data.kontradiksiBaruDitemukan || hasil.data.timelineBaruDiketahui)) {
+      await this.refreshHud(groupId, chatId);
+    }
+    return out;
   }
 
   private async tampilkanLinimasa(
@@ -1001,9 +1085,11 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
     const hasil = await layanan.prosesPerbaruiTeori({ sessionId: konteks.sesi.sessionId, userId, culpritSuspectId: suspectId });
-    return this.kirimHasilGameplay("/theory", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/theory", chatId, updateId, konteks.sesi, hasil, (data) => {
       return `🧠 Teori tim\n\nPelaku hipotesis: ${suspectId}\nDukungan: ${data.support}`;
     });
+    if (hasil.status === "berhasil") await this.refreshHud(groupId, chatId);
+    return out;
   }
 
   private async ajukanAkusasi(
@@ -1020,9 +1106,11 @@ export class KomandoTelegramLayanan {
 
     const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
     const hasil = await layanan.prosesAjukanTuduhan({ sessionId: konteks.sesi.sessionId, userId, suspectId });
-    return this.kirimHasilGameplay("/accuse", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/accuse", chatId, updateId, konteks.sesi, hasil, (data) => {
       return `⚖️ Proposal accusation diajukan untuk ${suspectId}. Status: ${data.status}. Gunakan /vote untuk memberikan suara.`;
     });
+    if (hasil.status === "berhasil") await this.refreshHud(groupId, chatId);
+    return out;
   }
 
   private async suaraAkusasi(
@@ -1035,11 +1123,13 @@ export class KomandoTelegramLayanan {
     if (!konteks.sesi) return gagal(konteks.error);
     const layanan = this.ambilLayanan(this.konfigurasi.layananResolusi, "layananResolusi");
     const hasil = await layanan.prosesVoteTuduhan({ sessionId: konteks.sesi.sessionId, userId });
-    return this.kirimHasilGameplay("/vote", chatId, updateId, konteks.sesi, hasil, (data) => {
+    const out = await this.kirimHasilGameplay("/vote", chatId, updateId, konteks.sesi, hasil, (data) => {
       const qualified = data.status === "QUALIFIED";
       const suara = data.votes.length;
       return `🗳️ Suara tercatat (${suara} pemain).${qualified ? "\n\nProposal qualified — siap difinalisasi dengan /finalize." : ""}`;
     });
+    if (hasil.status === "berhasil") await this.refreshHud(groupId, chatId);
+    return out;
   }
 
   private async finalisasiAkusasi(
@@ -1059,6 +1149,7 @@ export class KomandoTelegramLayanan {
       const outcome = data.correctCulprit ? "SOLVED ✅" : "FAILED ❌";
       const pesan = `🔔 Final accusation: ${data.suspectId}\nKepastian: ${data.correctCulprit ? "Benar" : "Salah"}\nHasil kasus: ${outcome}`;
       await this.kirimPesanAman(chatId, pesan, korelasi);
+      await this.lucutiHud(groupId, chatId);
       return berhasil({ command: "/finalize", message: pesan, session: konteks.sesi });
     }
 

@@ -82,6 +82,7 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       accusationProposal: sesi.accusationProposal ?? null,
       finalAccusation: sesi.finalAccusation ?? null,
       contributionRecordIds: sesi.contributionRecordIds ?? [],
+      hudMessageId: sesi.hudMessageId ?? null,
     };
   }
 
@@ -111,6 +112,7 @@ export class RepositoriSesiFirestore implements KontrakRepositoriSesiFirestore {
       accusationProposal: (data.accusationProposal as SesiKasus["accusationProposal"]) ?? null,
       finalAccusation: (data.finalAccusation as SesiKasus["finalAccusation"]) ?? null,
       contributionRecordIds: Array.isArray(data.contributionRecordIds) ? data.contributionRecordIds.map(String) : [],
+      hudMessageId: typeof data.hudMessageId === "string" ? data.hudMessageId : undefined,
     };
   }
 }
