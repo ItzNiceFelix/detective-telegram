@@ -979,7 +979,7 @@ export const DESKRIPSI_SKEMA_KANDIDAT = [
   "- Aturan proof graph: (1) semua proofNodes harus terjangkau dari proofNodes[0] lewat proofEdges (tidak ada node terisolasi); tepat 1 node kind=SOLUTION_FACT; (2) causalRelations 'dari'/'ke' hanya memakai evidenceId/timelineEventId/statementId/proofNodeId yang sudah terdaftar (jangan memakai contradictionId). Topologi aman: rantai sederhana N1→N2→…→SOLUTION_FACT dengan edge wajib=true.",
   "- Semua ID saling merujuk wajib valid (proofEdges.dari/ke ada di proofNodes; evidence.objectId ada di objects; objects.sceneId ada di scenes; dll).",
   "- Jangan tambahkan field terlarang (secret/password/apiKey/token/credential).",
-  "- Jangan memakai kata-kata ini di mana pun (termasuk title/premise/nama/dialog/statement): secret, token, credential, credentials, password, 'private data', 'explicit sexual', nude. Gunakan sinonim netral (mis. 'rahasia' → 'misteri tersembunyi', 'secret' → 'hidden truth').",
+  "- Jangan memakai kata-kata ini di mana pun (termasuk title/premise/nama/dialog/statement/claim) — output yang mengandungnya DITOLAK TOTAL: secret, token, credential, credentials, password, 'private data', 'explicit sexual', nude. Ganti dengan: 'hidden truth'→'buried fact', 'secret'→'concealed', 'password'→'passcode lock', 'token'→'keepsake'. Periksa ulang seluruh output sebelum menjawab; jika ada kata itu, tulis ulang bagiannya.",
   "- Hanya JSON (tanpa markdown, tanpa penjelasan luar).",
 ].join("\n");
 
