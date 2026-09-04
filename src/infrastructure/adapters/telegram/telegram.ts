@@ -161,7 +161,9 @@ export class TelegramAdapter implements PintuTelegram {
     if (typeof normalizedText === "string") {
       const token = normalizedText.split(/\s+/)[0] ?? "";
       if (token.startsWith("/")) {
-        command = token.toLowerCase();
+        // Strip @botusername suffix (Telegram adds this in groups)
+        const baseCommand = token.split("@")[0] ?? "";
+        command = baseCommand.toLowerCase();
       }
     }
 

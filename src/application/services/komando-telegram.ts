@@ -143,12 +143,16 @@ export class KomandoTelegramLayanan {
       const chatId = String(chatIdValue);
       const userIdTelegram = String(userIdTelegramValue);
       if (typeof permintaan.command === "string") {
-        command = permintaan.command.toLowerCase();
+        // Strip @botusername suffix (Telegram adds this in groups)
+        const baseCommand = permintaan.command.split("@")[0] ?? "";
+        command = baseCommand.toLowerCase();
       } else {
         const rawText = typeof permintaan.text === "string" ? permintaan.text : "";
         const token = rawText.trim().split(/\s+/)[0] ?? "";
         if (token.startsWith("/")) {
-          command = token.toLowerCase();
+          // Strip @botusername suffix (Telegram adds this in groups)
+          const baseCommand = token.split("@")[0] ?? "";
+          command = baseCommand.toLowerCase();
         }
       }
       if (!command) {
