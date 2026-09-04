@@ -68,6 +68,18 @@ export function buatFetchTelegramPalsu(statusAnggota: Record<string, string> = {
       return buatRespon({ ok: true, result: { message_id: sendCounter, chat: { id: payload.chat_id } } });
     }
 
+    if (metode === "editMessageText") {
+      return buatRespon({ ok: true, result: true });
+    }
+
+    if (metode === "answerCallbackQuery") {
+      return buatRespon({ ok: true, result: true });
+    }
+
+    if (metode === "pinChatMessage" || metode === "unpinChatMessage" || metode === "deleteMessage") {
+      return buatRespon({ ok: true, result: true });
+    }
+
     if (metode === "getChatMember") {
       const kunci = `${String(payload.chat_id)}:${String(payload.user_id)}`;
       const status = statusAnggota[kunci] ?? "left";

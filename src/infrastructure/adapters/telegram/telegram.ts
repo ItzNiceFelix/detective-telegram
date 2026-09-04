@@ -11,7 +11,22 @@ export interface PermintaanTelegram {
   command: string | undefined;
   action?: AksiTelegram;
   payload: Record<string, unknown>;
+  /** Callback query inbound (tombol inline). Actor SELALU dari `from`, bukan data. */
+  callback?: {
+    callbackId: string;
+    data: string;
+    messageId?: number | undefined;
+  } | undefined;
 }
+
+/** Satu tombol inline: teks tampil + data callback kompak berversi. */
+export interface TombolInlineTelegram {
+  teks: string;
+  data: string;
+}
+
+/** Keyboard inline: array baris, tiap baris array tombol. */
+export type KibordInlineTelegram = TombolInlineTelegram[][];
 
 export interface ResponTelegram {
   chatId: string;
@@ -140,6 +155,11 @@ export class TelegramAdapter implements PintuTelegram {
     return typeof secret === "string" && secret.length > 0 && payload !== undefined;
   }
 
+  /** Serialisasi keyboard inline ke payload Bot API (button → {text, callback_data}). */
+  serialisasiKibord(kibord: KibordInlineTelegram): Array<Array<{ text: string; callback_data: string }>> {
+    return kibord.map((baris) => baris.map((t) => ({ text: t.teks, callback_data: t.data })));
+  }
+
   parseUpdate(payload: unknown): PermintaanTelegram {
     const data = (payload ?? {}) as Record<string, unknown>;
     const rawMessage = (data.message as Record<string, unknown> | undefined) ?? (data.callback_query as Record<string, unknown> | undefined);
@@ -151,10 +171,19 @@ export class TelegramAdapter implements PintuTelegram {
     const nestedFrom = nestedMessage && typeof nestedMessage.from === "object" ? (nestedMessage.from as Record<string, unknown>) : undefined;
     const text = message && typeof message.text === "string" ? message.text : message && typeof message.data === "string" ? message.data : undefined;
     const finalFrom = from ?? nestedFrom;
-    const chatTypeValue = chat && typeof chat.type === "string" ? chat.type : nestedChat && typeof nestedChat.type === "string" ? nestedChat.type : undefined;
+    const nestedMessageChatForType = nestedMessage && typeof nestedMessage.chat === "object" ? (nestedMessage.chat as Record<string, unknown>) : undefined;
+    const chatTypeValue = chat && typeof chat.type === "string"
+      ? chat.type
+      : nestedMessageChatForType && typeof nestedMessageChatForType.type === "string"
+        ? nestedMessageChatForType.type
+        : nestedChat && typeof nestedChat.type === "string"
+          ? nestedChat.type
+          : undefined;
 
     const userIdValue = finalFrom && typeof finalFrom["id"] === "number" ? String(finalFrom["id"]) : undefined;
-    const chatIdValue = chat && typeof chat["id"] === "number" ? String(chat["id"]) : undefined;
+    const nestedMessageChat = nestedMessage && typeof nestedMessage.chat === "object" ? (nestedMessage.chat as Record<string, unknown>) : undefined;
+    const chatUntukId = chat ?? nestedMessageChat;
+    const chatIdValue = chatUntukId && typeof chatUntukId["id"] === "number" ? String(chatUntukId["id"]) : undefined;
 
     const normalizedText = typeof text === "string" ? text.trim() : undefined;
     let command: string | undefined;
@@ -167,6 +196,16 @@ export class TelegramAdapter implements PintuTelegram {
       }
     }
 
+    let callback: PermintaanTelegram["callback"];
+    if (data.callback_query && typeof data.callback_query === "object") {
+      const cb = data.callback_query as Record<string, unknown>;
+      const cbId = typeof cb.id === "string" ? cb.id : typeof cb.id === "number" ? String(cb.id) : undefined;
+      const cbData = typeof cb.data === "string" ? cb.data : undefined;
+      const cbMsg = cb.message && typeof cb.message === "object" ? (cb.message as Record<string, unknown>) : undefined;
+      const cbMsgId = cbMsg && typeof cbMsg.message_id === "number" ? cbMsg.message_id : undefined;
+      if (cbId && cbData) callback = { callbackId: cbId, data: cbData, messageId: cbMsgId };
+    }
+
     return {
       updateId: typeof data.update_id === "number" ? String(data.update_id) : "",
       userId: userIdValue,
@@ -175,12 +214,93 @@ export class TelegramAdapter implements PintuTelegram {
       text: normalizedText,
       command,
       payload: data,
+      callback,
     };
   }
 
   /** Kirim pesan ke chat Telegram via Bot API `sendMessage`. */
   async kirim(respon: ResponTelegram): Promise<void> {
     await this.kirimPesanTelegram(respon.chatId, respon.text);
+  }
+
+  /**
+   * Kirim pesan + inline keyboard. Mengembalikan message_id untuk lifecycle
+   * (mis. disimpan sebagai HUD id). Tanpa parse_mode default; Markdown hanya
+   * bila teks memuat code block tap-to-copy.
+   */
+  async kirimPesanKibord(
+    chatId: string,
+    text: string,
+    kibord: KibordInlineTelegram,
+    opsi?: { parseMode?: "Markdown"; disableNotification?: boolean },
+  ): Promise<number> {
+    if (!this.botToken) {
+      throw new KesalahanKonfigurasi("TELEGRAM_BOT_TOKEN belum dikonfigurasi.");
+    }
+    const data = (await this.panggilApiTelegram("sendMessage", {
+      chat_id: chatId,
+      text,
+      reply_markup: { inline_keyboard: this.serialisasiKibord(kibord) },
+      ...(opsi?.parseMode ? { parse_mode: opsi.parseMode } : {}),
+      ...(opsi?.disableNotification ? { disable_notification: true } : {}),
+    })) as ResponApiTelegram;
+    const result = data.result as { message_id?: unknown } | undefined;
+    return typeof result?.message_id === "number" ? result.message_id : 0;
+  }
+
+  /**
+   * Edit teks + keyboard pesan yang sudah ada (menu/paginasi/HUD aggregate).
+   * Gagal (mis. message not found / tidak berubah) → KesalahanIntegrasi;
+   * pemanggil wajib graceful (UI refresh bukan mutasi kanonik).
+   */
+  async suntingPesanKibord(
+    chatId: string,
+    messageId: number,
+    text: string,
+    kibord?: KibordInlineTelegram,
+    opsi?: { parseMode?: "Markdown" },
+  ): Promise<void> {
+    await this.panggilApiTelegram("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      ...(kibord ? { reply_markup: { inline_keyboard: this.serialisasiKibord(kibord) } } : {}),
+      ...(opsi?.parseMode ? { parse_mode: opsi.parseMode } : {}),
+    });
+  }
+
+  /**
+   * Acknowledge callback query — menghentikan spinner Telegram. Selalu
+   * dipanggil secepatnya; teks opsional untuk feedback singkat.
+   * Kegagalan diabaikan (best-effort, bukan mutasi kanonik).
+   */
+  async jawabCallback(callbackId: string, teks?: string): Promise<void> {
+    try {
+      await this.panggilApiTelegram("answerCallbackQuery", {
+        callback_query_id: callbackId,
+        ...(teks ? { text: teks.slice(0, 200) } : {}),
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
+  /**
+   * Sematkan pesan (HUD utama). Gagal (mis. tanpa izin admin) → KesalahanIntegrasi;
+   * pemanggil wajib graceful — pin adalah presentation state, bukan game state.
+   */
+  async sematkanPesan(chatId: string, messageId: number): Promise<void> {
+    await this.panggilApiTelegram("pinChatMessage", { chat_id: chatId, message_id: messageId });
+  }
+
+  /** Lepas sematan. Gagal → KesalahanIntegrasi; pemanggil wajib graceful. */
+  async lucutiSematPesan(chatId: string, messageId: number): Promise<void> {
+    await this.panggilApiTelegram("unpinChatMessage", { chat_id: chatId, message_id: messageId });
+  }
+
+  /** Hapus pesan (UI temporer). Gagal → KesalahanIntegrasi; pemanggil wajib graceful. */
+  async padamPesan(chatId: string, messageId: number): Promise<void> {
+    await this.panggilApiTelegram("deleteMessage", { chat_id: chatId, message_id: messageId });
   }
 
   /**
