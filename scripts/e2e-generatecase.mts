@@ -54,5 +54,6 @@ const payload = {
 };
 console.log("Mengirim /generatecase ...");
 const t0 = Date.now();
+const hasil = await handlerInternal({ method: "POST", headers: { "x-telegram-bot-api-secret-token": process.env.TELEGRAM_SECRET ?? "" }, body: JSON.stringify(payload) });
 console.log("HTTP " + hasil.status + " dalam " + (Date.now() - t0) + "ms");
 console.log("BODY: " + hasil.body.slice(0, 600));
