@@ -310,7 +310,7 @@ export class TelegramAdapter implements PintuTelegram {
    * parseMode "Markdown" dipakai pesan yang memuat code block (tap-to-copy);
    * default tanpa parse_mode agar teks biasa tidak rusak oleh karakter Markdown.
    */
-  async kirimPesanTelegram(chatId: string, text: string, opsi?: { parseMode?: "Markdown" }): Promise<number> {
+  async kirimPesanTelegram(chatId: string, text: string, opsi?: { parseMode?: "Markdown" | "HTML" }): Promise<number> {
     if (!this.botToken) {
       throw new KesalahanKonfigurasi("TELEGRAM_BOT_TOKEN belum dikonfigurasi.");
     }

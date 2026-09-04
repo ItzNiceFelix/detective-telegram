@@ -39,7 +39,7 @@ export interface KonfigurasiLayananTugasAset {
   vaultChatId: string | undefined;
   waktu: PenyediaWaktu;
   pembuatIdTugas: () => string;
-  kirimPesan: (chatId: string, text: string, opsi?: { parseMode?: "Markdown" }) => Promise<number>;
+  kirimPesan: (chatId: string, text: string, opsi?: { parseMode?: "Markdown" | "HTML" }) => Promise<number>;
   validasiAdminVault: (userId: string, chatId: string) => Promise<boolean>;
 }
 
@@ -82,7 +82,7 @@ export class LayananTugasAset {
     if (tugas.status === "WAITING_FOR_ADMIN" && tugas.telegramMessageId) return tugas;
 
     const ternavigasi = hubunganKirim(tugas);
-    const messageId = await this.cfg.kirimPesan(vault, bangunPesanTugas(ternavigasi), { parseMode: "Markdown" });
+    const messageId = await kirimPesanTugas(this.cfg.kirimPesan, vault, ternavigasi);
     const t2: TugasAset = {
       ...ternavigasi,
       status: "WAITING_FOR_ADMIN",
@@ -101,7 +101,7 @@ export class LayananTugasAset {
     if (tugas.status === "VERIFIED") throw new KesalahanValidasi("AssetTask VERIFIED immutable; gunakan revisi/task baru.");
 
     const ternavigasi = hubunganKirim({ ...tugas, status: tugas.status === "DRAFT" ? "DRAFT" : "WAITING_FOR_ADMIN" });
-    const messageId = await this.cfg.kirimPesan(vault, bangunPesanTugas(ternavigasi), { parseMode: "Markdown" });
+    const messageId = await kirimPesanTugas(this.cfg.kirimPesan, vault, ternavigasi);
     const t2: TugasAset = {
       ...ternavigasi,
       status: "WAITING_FOR_ADMIN",
@@ -222,21 +222,55 @@ function hubunganKirim(tugas: TugasAset): TugasAset {
   throw new KesalahanValidasi("AssetTask hanya dapat dikirim dari status DRAFT (atau WAITING_FOR_ADMIN).");
 }
 
+function escapeHtml(teks: string): string {
+  return teks.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Kirim pesan task: HTML dulu (tap-to-copy via <code>/<pre>, kebal terhadap
+ * underscore/bintang di prompt AI), fallback plaintext bila parse gagal.
+ */
+async function kirimPesanTugas(
+  kirimPesan: (chatId: string, text: string, opsi?: { parseMode?: "Markdown" | "HTML" }) => Promise<number>,
+  vault: string,
+  tugas: TugasAset,
+): Promise<number> {
+  try {
+    return await kirimPesan(vault, bangunPesanTugas(tugas), { parseMode: "HTML" });
+  } catch {
+    return await kirimPesan(vault, bangunPesanTugasPlain(tugas));
+  }
+}
+
 function bangunPesanTugas(t: TugasAset): string {
-  const promptAman = t.prompt.replace(/```/g, "'''");
-  const idAman = (id: string): string => "`" + id.replace(/`/g, "") + "`";
+  const promptAman = escapeHtml(t.prompt);
+  const idAman = (id: string): string => `<code>${escapeHtml(id)}</code>`;
   return [
     `[ASSET TASK] ${idAman(t.taskId)}`,
     `Case: ${idAman(t.caseId)}`,
     `CaseVersion: ${idAman(t.caseVersionId)}`,
     `Scene: ${idAman(t.sceneId)}`,
+    `Asset Type: ${escapeHtml(t.assetType)}`,
+    `Required visual clues: ${escapeHtml(t.requiredClues.join(", ") || "none")}`,
+    ``,
+    `Prompt (tap to copy):`,
+    `<pre>${promptAman}</pre>`,
+    ``,
+    `Balas pesan ini dengan hasil gambar.`,
+  ].join("\n");
+}
+
+function bangunPesanTugasPlain(t: TugasAset): string {
+  return [
+    `[ASSET TASK] ${t.taskId}`,
+    `Case: ${t.caseId}`,
+    `CaseVersion: ${t.caseVersionId}`,
+    `Scene: ${t.sceneId}`,
     `Asset Type: ${t.assetType}`,
     `Required visual clues: ${t.requiredClues.join(", ") || "none"}`,
     ``,
-    "Prompt (tap to copy):",
-    "```",
-    promptAman,
-    "```",
+    `Prompt:`,
+    t.prompt,
     ``,
     `Balas pesan ini dengan hasil gambar.`,
   ].join("\n");
