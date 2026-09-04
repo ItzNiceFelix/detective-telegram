@@ -329,7 +329,7 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
     penerbitEventDomain,
     kontrakIdempoten: repositoriIdempoten,
     waktu,
-    kirimPesanTelegram: (chatId, pesan) => pengirimTelegram.kirimPesanTelegram(chatId, pesan).then(() => undefined),
+    kirimPesanTelegram: (chatId, pesan, opsi) => pengirimTelegram.kirimPesanTelegram(chatId, pesan, opsi).then(() => undefined),
     validasiAksesTelegram: (userId, chatId) => validatorAksesTelegram.validasi(userId, chatId),
     validasiGroupTelegram: (chatId) => validatorGrupTelegram.validasi(chatId),
     validasiAdminGrup: (userId, chatId) => validatorAdminGrupTelegram.validasi(userId, chatId),

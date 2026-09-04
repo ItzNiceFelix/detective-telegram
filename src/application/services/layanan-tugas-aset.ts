@@ -224,11 +224,12 @@ function hubunganKirim(tugas: TugasAset): TugasAset {
 
 function bangunPesanTugas(t: TugasAset): string {
   const promptAman = t.prompt.replace(/```/g, "'''");
+  const idAman = (id: string): string => "`" + id.replace(/`/g, "") + "`";
   return [
-    `[ASSET TASK] ${t.taskId}`,
-    `Case: ${t.caseId}`,
-    `CaseVersion: ${t.caseVersionId}`,
-    `Scene: ${t.sceneId}`,
+    `[ASSET TASK] ${idAman(t.taskId)}`,
+    `Case: ${idAman(t.caseId)}`,
+    `CaseVersion: ${idAman(t.caseVersionId)}`,
+    `Scene: ${idAman(t.sceneId)}`,
     `Asset Type: ${t.assetType}`,
     `Required visual clues: ${t.requiredClues.join(", ") || "none"}`,
     ``,

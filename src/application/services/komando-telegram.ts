@@ -59,7 +59,7 @@ export interface KonfigurasiKomandoTelegram {
   penerbitEventDomain: PenerbitEventTelegram;
   kontrakIdempoten: KontrakIdempoten;
   waktu: PenyediaWaktuTelegram;
-  kirimPesanTelegram: (chatId: string, message: string) => Promise<void>;
+  kirimPesanTelegram: (chatId: string, message: string, opsi?: { parseMode?: "Markdown" }) => Promise<void>;
   validasiAksesTelegram: (userId: string, groupId: string) => Promise<boolean>;
   validasiGroupTelegram: (chatId: string) => Promise<boolean>;
   /** /startcase: admin grup. Default fallback: validasiAksesTelegram. */
@@ -1089,12 +1089,24 @@ export class KomandoTelegramLayanan {
    * Outbound Telegram SETELAH commit: kegagalan TIDAK me-rollback canonical
    * state (PERSIST-07, docs/22.7). Kegagalan dicatat dengan correlation ID.
    */
-  private async kirimPesanAman(chatId: string, pesan: string, korelasi: { command: string; updateId: string; sessionId?: string }): Promise<void> {
+  private async kirimPesanAman(
+    chatId: string,
+    pesan: string,
+    korelasi: { command: string; updateId: string; sessionId?: string },
+    opsi?: { parseMode?: "Markdown" },
+  ): Promise<void> {
   console.log(JSON.stringify({ debug: "mencoba_kirim", chatId, pesanPanjang: pesan.length, ...korelasi }));
   try {
-    await this.konfigurasi.kirimPesanTelegram(chatId, pesan);
+    await (this.konfigurasi.kirimPesanTelegram as (c: string, m: string, o?: { parseMode?: "Markdown" }) => Promise<void>)(chatId, pesan, opsi);
     console.log(JSON.stringify({ debug: "kirim_sukses", chatId }));
   } catch (error) {
+    if (opsi?.parseMode) {
+      try {
+        await this.konfigurasi.kirimPesanTelegram(chatId, pesan);
+        console.log(JSON.stringify({ debug: "kirim_sukses_fallback", chatId }));
+        return;
+      } catch {}
+    }
     console.log(JSON.stringify({
       debug: "kirim_gagal",
       ...korelasi,
@@ -1209,18 +1221,18 @@ export class KomandoTelegramLayanan {
 
     const pesan = [
       `✅ Case dibuat: ${kandidat.metadata?.title ?? kandidat.caseId}`,
-      `CaseId: ${kandidat.caseId}`,
-      `VersionId: ${kandidat.versionId}`,
+      `CaseId: \`${kandidat.caseId}\``,
+      `VersionId: \`${kandidat.versionId}\``,
       ``,
       `🧩 ${terkirim.length} asset task dikirim ke grup aset${gagalKirim > 0 ? ` (${gagalKirim} gagal)` : ""}.`,
       ``,
       `Langkah berikutnya:`,
       `1) Di grup aset, balas tiap pesan [ASSET TASK] dengan gambar.`,
-      `2) Verifikasi tiap task: /verifytask <taskId>`,
-      `   (tolak: /rejecttask <taskId> <alasan>)`,
-      `3) Publish: /publishcase ${kandidat.caseId} ${kandidat.versionId}`,
+      `2) Verifikasi tiap task: \`\/verifytask <taskId>\``,
+      `   (tolak: \`\/rejecttask <taskId> <alasan>\`)`,
+      `3) Publish: \`\/publishcase ${kandidat.caseId} ${kandidat.versionId}\``,
     ].join("\n");
-    await this.kirimPesanAman(chatId, pesan, { command: "/generatecase", updateId });
+    await this.kirimPesanAman(chatId, pesan, { command: "/generatecase", updateId }, { parseMode: "Markdown" });
     return berhasil({ command: "/generatecase", message: pesan });
   }
 
