@@ -6,9 +6,23 @@ export interface PermintaanAi {
   maxTokens?: number;
 }
 
+/**
+ * Metadata penggunaan token generik dari AI adapter — provider-agnostic.
+ * Opsional & backward-compatible: domain/Game Engine TIDAK bergantung padanya.
+ * Tidak membocorkan field provider-specific ke domain.
+ */
+export interface PenggunaanAi {
+  tokenInput?: number | undefined;
+  tokenOutput?: number | undefined;
+  tokenTotal?: number | undefined;
+  tokenThinking?: number | undefined;
+}
+
 export interface ResponAi {
   output: string;
   warnings: string[];
+  /** Metadata penggunaan token (opsional; null/unavailable → field absen). */
+  usage?: PenggunaanAi | undefined;
 }
 
 export interface PintuAi {

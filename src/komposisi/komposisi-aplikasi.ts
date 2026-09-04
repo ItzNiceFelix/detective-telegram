@@ -27,6 +27,7 @@ import { bacaKonfigurasiAi, type KonfigurasiAi } from "../ai/konfigurasi.js";
 import { GeminiTextProvider } from "../infrastructure/adapters/ai/gemini-text.js";
 import { GeminiImageProvider } from "../infrastructure/adapters/ai/gemini-image.js";
 import type { PintuAi } from "../ai/contracts.js";
+import { buatPenerimaTelemetriAi } from "../infrastructure/adapters/ai/telemetri-ai.js";
 import type { KontrakPenyediaGambar, KontrakPenyimpananGambar } from "../ai/visual-pipeline.js";
 import { RepositoriAsetVisualFirestore } from "../infrastructure/repositories/firestore/repositori-aset-visual.js";
 import { LayananProduksiKasus } from "../application/services/layanan-produksi-kasus.js";
@@ -104,6 +105,15 @@ export interface KomposisiAplikasi {
 }
 
 /**
+ * Boolean env opsional untuk flag AI (opsional/gagal-aman).
+ * AI_COUNT_TOKENS_ENABLED — aktifkan preflight countTokens (default false).
+ */
+function bacaBooleanEnv(kunci: string): boolean {
+  const raw = (process.env[kunci] ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1";
+}
+
+/**
  * Pilih penyimpanan gambar binary — configuration-driven (docs/ASSET-STORAGE-DECISION.md).
  * ASSET_STORAGE_PROVIDER=TELEGRAM_BETA -> Telegram Asset Vault (BEST_EFFORT, beta).
  * default/FIREBASE_STORAGE -> PenyimpananGambarFirebase (canonical future).
@@ -158,12 +168,14 @@ export function buatKomposisiAplikasi(opsi: OpsiKomposisiAplikasi = {}): Komposi
   const penyediaTeks = opsi.penyediaTeks ?? (
     konfigurasiAi.textReady
       ? (() => {
-          const opsiTeks: { apiKey: string; model: string; timeoutMs: number; maxRetries: number; maxOutputTokens: number; apiBase?: string } = {
+          const opsiTeks: { apiKey: string; model: string; timeoutMs: number; maxRetries: number; maxOutputTokens: number; apiBase?: string; countTokensEnabled: boolean; telemetri: ReturnType<typeof buatPenerimaTelemetriAi> } = {
             apiKey: konfigurasiAi.geminiApiKey as string,
             model: konfigurasiAi.textModel,
             timeoutMs: konfigurasiAi.timeoutMs,
             maxRetries: konfigurasiAi.maxRetries,
             maxOutputTokens: konfigurasiAi.maxOutputTokens,
+            countTokensEnabled: bacaBooleanEnv("AI_COUNT_TOKENS_ENABLED"),
+            telemetri: buatPenerimaTelemetriAi(logger, konfigurasiAi.provider, konfigurasiAi.textModel),
           };
           if (process.env.GEMINI_API_BASE) opsiTeks.apiBase = process.env.GEMINI_API_BASE;
           return new GeminiTextProvider(opsiTeks);

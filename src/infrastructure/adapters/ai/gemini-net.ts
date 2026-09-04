@@ -8,7 +8,7 @@ import { buatKesalahanProviderAi, type KategoriKesalahanAi } from "../../../ai/e
 export interface OpsiPanggilanGemini {
   apiKey: string;
   model: string;
-  endpointPath: "generateContent";
+  endpointPath: "generateContent" | "countTokens";
   payload: Record<string, unknown>;
   fetchImpl: typeof fetch;
   timeoutMs: number;
@@ -95,6 +95,48 @@ export function ambilTeksDariRespons(data: unknown): string | null {
     .map((p) => (typeof p.text === "string" ? p.text : ""))
     .join("");
   return teks.length > 0 ? teks : null;
+}
+
+/**
+ * Metadata token generik hasil normalisasi respons provider.
+ * Field `undefined` = provider tidak melaporkan nilai tersebut.
+ */
+export interface MetadataTokenTerurai {
+  tokenInput?: number | undefined;
+  tokenOutput?: number | undefined;
+  tokenTotal?: number | undefined;
+  tokenThinking?: number | undefined;
+}
+
+function angkaAtauTidak(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Parse `usageMetadata` dari respons generateContent (provider usage metadata,
+ * prioritas 1). Tidak ada usageMetadata → object kosong (panggilan memilih
+ * fallback: countTokens preflight → null).
+ */
+export function uraiUsageMetadata(data: unknown): MetadataTokenTerurai {
+  if (!isRecord(data)) return {};
+  const usage = data.usageMetadata;
+  if (!isRecord(usage)) return {};
+  return {
+    tokenInput: angkaAtauTidak(usage.promptTokenCount),
+    tokenOutput: angkaAtauTidak(usage.candidatesTokenCount),
+    tokenTotal: angkaAtauTidak(usage.totalTokenCount),
+    tokenThinking: angkaAtauTidak(usage.thoughtsTokenCount),
+  };
+}
+
+/**
+ * Parse respons `countTokens` (totalTokens di root) sebagai estimasi input
+ * token (prioritas 2 — preflight opsional). Gagal/absen → null.
+ */
+export function uraiTotalTokens(data: unknown): number | null {
+  if (!isRecord(data)) return null;
+  const total = angkaAtauTidak(data.totalTokens);
+  return total === undefined ? null : total;
 }
 
 export function alasanBlokir(data: unknown): string | null {
